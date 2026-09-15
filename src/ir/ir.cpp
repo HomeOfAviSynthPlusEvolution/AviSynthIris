@@ -8,9 +8,9 @@ unsigned arity(Op op) {
   if (op <= Op::Frame)
     return 0;
   if (op == Op::ToBool || op == Op::ToNumber || op == Op::Abs || op == Op::Sqrt || op == Op::Not ||
-      (op >= Op::Neg && op <= Op::Trunc))
+      (op >= Op::Neg && op <= Op::Atan))
     return 1;
-  return op == Op::Select ? 3 : 2;
+  return op == Op::Select || op == Op::Clip ? 3 : 2;
 }
 Type result_type(Op op) {
   return op == Op::ToBool || (op >= Op::Lt && op <= Op::Not) ? Type::Bool : Type::Number;
@@ -53,6 +53,30 @@ float evaluate(Op op, float a, float b, float c) noexcept {
       return std::ceil(a);
     case Op::Trunc:
       return std::trunc(a);
+    case Op::Exp:
+      return std::exp(a);
+    case Op::Log:
+      return std::log(a);
+    case Op::Sin:
+      return std::sin(a);
+    case Op::Cos:
+      return std::cos(a);
+    case Op::Tan:
+      return std::tan(a);
+    case Op::Asin:
+      return std::asin(a);
+    case Op::Acos:
+      return std::acos(a);
+    case Op::Atan:
+      return std::atan(a);
+    case Op::Fmod:
+      return std::fmod(a, b);
+    case Op::Pow:
+      return std::pow(a, b);
+    case Op::Atan2:
+      return std::atan2(a, b);
+    case Op::Clip:
+      return evaluate(Op::Max, evaluate(Op::Min, a, c), b);
     case Op::Lt:
       return a < b;
     case Op::Le:
@@ -160,11 +184,12 @@ void optimize(IR& ir) {
   ir.properties = std::move(props);
 }
 std::string dump(const IR& ir) {
-  static const char* names[] = {"const",   "input",   "property",  "sx",   "sy",  "width", "height",
-                                "frameno", "to_bool", "to_number", "add",  "sub", "mul",   "div",
-                                "min",     "max",     "abs",       "sqrt", "neg", "sgn",   "round",
-                                "floor",   "ceil",    "trunc",     "lt",   "le",  "eq",    "ne",
-                                "ge",      "gt",      "and",       "or",   "xor", "not",   "select"};
+  static const char* names[] = {"const",   "input",     "property", "sx",   "sy",    "width", "height", "frameno",
+                                "to_bool", "to_number", "add",      "sub",  "mul",   "div",   "min",    "max",
+                                "abs",     "sqrt",      "neg",      "sgn",  "round", "floor", "ceil",   "trunc",
+                                "exp",     "log",       "sin",      "cos",  "tan",   "asin",  "acos",   "atan",
+                                "fmod",    "pow",       "atan2",    "clip", "lt",    "le",    "eq",     "ne",
+                                "ge",      "gt",        "and",      "or",   "xor",   "not",   "select"};
   std::ostringstream s;
   s << std::setprecision(9);
   for (size_t i = 0; i < ir.nodes.size(); ++i) {

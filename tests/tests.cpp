@@ -155,6 +155,12 @@ void numerical() {
                         {"-0 -1 max", 0.0f},
                         {"1 -0 /", -INFINITY},
                         {"-0 abs", 0.0f},
+                        {"5 1 9 clip", 5},
+                        {"-1 1 9 clip", 1},
+                        {"12 1 9 clip", 9},
+                        {"5 9 1 clip", 9},
+                        {"-0 -0 1 clip", 0.0f},
+                        {"0 0 / 1 9 clip", NAN},
                         {"0 0 / not", 1},
                         {"0 0 / 0 !=", 1},
                         {"0 0 / 0 =", 0},
@@ -273,6 +279,40 @@ void unary_math() {
       CHECK(std::isnan(p.value(NAN)));
     }
   }
+}
+void libm_math() {
+  for (int optimize = 0; optimize < 2; ++optimize) {
+    Compiled clip("x y z clip", options(1, 1, optimize));
+    CHECK(same(clip.value(5, 1, 9), 5));
+    CHECK(same(clip.value(-1, 1, 9), 1));
+    CHECK(same(clip.value(12, 1, 9), 9));
+    CHECK(same(clip.value(5, 9, 1), 9));
+    CHECK(same(clip.value(-0.0f, -0.0f, 1), 0.0f));
+    CHECK(std::isnan(clip.value(NAN, 1, 9)));
+    CHECK(std::isnan(clip.value(5, NAN, 9)));
+    CHECK(std::isnan(clip.value(5, 1, NAN)));
+  }
+  struct Case {
+    const char* literal;
+    const char* runtime;
+    float x, y, expected;
+  };
+  const Case cases[] = {{"0 exp", "x exp", 0, 0, 1},          {"1 log", "x log", 1, 0, 0},
+                        {"0 log", "x log", 0, 0, -INFINITY},  {"-1 log", "x log", -1, 0, NAN},
+                        {"0 sin", "x sin", 0, 0, 0},          {"0 cos", "x cos", 0, 0, 1},
+                        {"-0 tan", "x tan", -0.0f, 0, -0.0f}, {"0 asin", "x asin", 0, 0, 0},
+                        {"1 acos", "x acos", 1, 0, 0},        {"0 atan", "x atan", 0, 0, 0},
+                        {"2 asin", "x asin", 2, 0, NAN},      {"-2 acos", "x acos", -2, 0, NAN},
+                        {"-5 2 %", "x y %", -5, 2, -1},       {"5 -2 %", "x y %", 5, -2, 1},
+                        {"2 0 %", "x y %", 2, 0, NAN},        {"-2 3 pow", "x y pow", -2, 3, -8},
+                        {"2 3 ^", "x y ^", 2, 3, 8},          {"-2 0.5 pow", "x y pow", -2, .5f, NAN},
+                        {"0 1 atan2", "x y atan2", 0, 1, 0},  {"-0 1 atan2", "x y atan2", -0.0f, 1, -0.0f}};
+  for (int optimize = 0; optimize < 2; ++optimize)
+    for (const auto& item : cases) {
+      CHECK(same(Compiled(item.literal, options(1, 1, optimize)).value(), item.expected));
+      CHECK(same(Compiled(item.runtime, options(1, 1, optimize)).value(item.x, item.y), item.expected));
+    }
+  CHECK(same(Compiled("pi").value(), 3.14159265358979323846f));
 }
 void errors() {
   for (const char* expression : {"dup0", "1 swap1", "1 dup1", "1 2 swap0", "1 dup-1", "1 dup+", "1 dup4294967296",
@@ -580,16 +620,18 @@ std::string expression(std::mt19937& rng, int depth) {
   }
   unsigned op = rng() % 4;
   if (op == 0) {
-    const char* unary[] = {" abs", " sqrt", " not"};
-    return expression(rng, depth - 1) + unary[rng() % 3];
+    const char* unary[] = {" abs", " sqrt", " not", " neg", " sgn", " round", " floor", " ceil", " trunc",
+                           " exp", " log",  " sin", " cos", " tan", " asin",  " acos",  " atan"};
+    return expression(rng, depth - 1) + unary[rng() % (sizeof unary / sizeof *unary)];
   }
   if (op == 1) {
     auto a = expression(rng, depth - 1), b = expression(rng, depth - 1), c = expression(rng, depth - 1);
     return a + " " + b + " " + c + " ?";
   }
-  const char* binary[] = {"+", "-", "*", "/", "min", "max", "<", "<=", "=", "!=", ">=", ">", "and", "or", "xor"};
+  const char* binary[] = {"+",  "-",  "*", "/",   "min", "max", "<", "<=",  "=",
+                          "!=", ">=", ">", "and", "or",  "xor", "%", "pow", "atan2"};
   auto a = expression(rng, depth - 1), b = expression(rng, depth - 1);
-  return a + " " + b + " " + binary[rng() % 15];
+  return a + " " + b + " " + binary[rng() % (sizeof binary / sizeof *binary)];
 }
 void differential() {
   std::mt19937 rng(0x1a15);
@@ -892,6 +934,7 @@ int main(int argc, char** argv) {
     sqrt_boundaries();
     zero_results();
     unary_math();
+    libm_math();
     errors();
     layout();
     strategies_and_allocation();

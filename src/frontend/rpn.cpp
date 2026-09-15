@@ -58,9 +58,12 @@ const std::unordered_map<std::string, Op> ops = {
     {"or", Op::Or},       {"xor", Op::Xor},     {"not", Op::Not},       {"?", Op::Select},      {"sx", Op::Sx},
     {"sy", Op::Sy},       {"width", Op::Width}, {"height", Op::Height}, {"frameno", Op::Frame}, {"==", Op::Eq},
     {"&", Op::And},       {"|", Op::Or},        {"neg", Op::Neg},       {"sgn", Op::Sgn},       {"round", Op::Round},
-    {"floor", Op::Floor}, {"ceil", Op::Ceil},   {"trunc", Op::Trunc}};
+    {"floor", Op::Floor}, {"ceil", Op::Ceil},   {"trunc", Op::Trunc},   {"exp", Op::Exp},       {"log", Op::Log},
+    {"sin", Op::Sin},     {"cos", Op::Cos},     {"tan", Op::Tan},       {"asin", Op::Asin},     {"acos", Op::Acos},
+    {"atan", Op::Atan},   {"%", Op::Fmod},      {"pow", Op::Pow},       {"^", Op::Pow},         {"atan2", Op::Atan2},
+    {"clip", Op::Clip}};
 bool reserved(const std::string& s) {
-  return ops.count(s) || s == "dup" || s == "swap" || s == "x" || s == "y" || s == "z";
+  return ops.count(s) || s == "pi" || s == "dup" || s == "swap" || s == "x" || s == "y" || s == "z";
 }
 } // namespace
 IR parse(const std::string& source, uint32_t input_count) {
@@ -147,6 +150,8 @@ IR parse(const std::string& source, uint32_t input_count) {
         n.args[j] = convert(stack[stack.size() - count + j], wanted);
       }
       stack.resize(stack.size() - count);
+    } else if (t == "pi") {
+      n.value = 3.14159265358979323846f;
     } else if (decimal(t)) {
       const char* begin = t.data();
       if (*begin == '+')

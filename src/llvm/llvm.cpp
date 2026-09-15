@@ -10,6 +10,10 @@
 
 namespace iris {
 namespace {
+// Private native ABI for libm nodes; no process-global symbol lookup is needed.
+extern "C" float iris_host_math(uint32_t op, float a, float c) noexcept {
+  return evaluate(static_cast<Op>(op), a, c);
+}
 void check(LLVMErrorRef error) {
   if (!error)
     return;
@@ -95,6 +99,17 @@ struct Lowering {
     auto result = select(cmp(LLVMRealOEQ, ordinary, number(0)), number(0), ordinary);
     return select(cmp(LLVMRealUNO, a, c), number(std::numeric_limits<float>::quiet_NaN()), result);
   }
+  LLVMValueRef math_call(Op op, LLVMValueRef a, LLVMValueRef c) {
+    LLVMTypeRef types[] = {i32, f32, f32};
+    auto type = LLVMFunctionType(f32, types, 3, 0);
+    auto address = LLVMConstInt(iptr, reinterpret_cast<uintptr_t>(&iris_host_math), 0);
+    auto fn = LLVMConstIntToPtr(address, ptr);
+    LLVMValueRef args[] = {LLVMConstInt(i32, static_cast<unsigned>(op), 0), a, c};
+    auto call = LLVMBuildCall2(b, type, fn, args, 3, "");
+    auto nounwind = LLVMCreateEnumAttribute(m.context, LLVMGetEnumAttributeKindForName("nounwind", 8), 0);
+    LLVMAddCallSiteAttribute(call, LLVMAttributeFunctionIndex, nounwind);
+    return call;
+  }
   void output(LLVMValueRef value, const Program& p) {
     auto base = field(ptr, offsetof(iris_execute_args, output) + offsetof(iris_output_plane, data));
     auto stride = field(iptr, offsetof(iris_execute_args, output) + offsetof(iris_output_plane, stride));
@@ -117,6 +132,8 @@ struct Lowering {
   void lower(const Program& p) {
     LLVMTypeRef params[] = {ptr, i32};
     auto fn = LLVMAddFunction(m.module, "iris_row", LLVMFunctionType(LLVMVoidTypeInContext(m.context), params, 2, 0));
+    LLVMAddAttributeAtIndex(fn, LLVMAttributeFunctionIndex,
+                            LLVMCreateEnumAttribute(m.context, LLVMGetEnumAttributeKindForName("nounwind", 8), 0));
     auto entry = LLVMAppendBasicBlockInContext(m.context, fn, "entry");
     auto loop = LLVMAppendBasicBlockInContext(m.context, fn, "pixels");
     auto done = LLVMAppendBasicBlockInContext(m.context, fn, "done");
@@ -209,6 +226,24 @@ struct Lowering {
           break;
         case Op::Trunc:
           v = intrinsic("llvm.trunc.f32", a);
+          break;
+        case Op::Exp:
+        case Op::Log:
+        case Op::Sin:
+        case Op::Cos:
+        case Op::Tan:
+        case Op::Asin:
+        case Op::Acos:
+        case Op::Atan:
+          v = math_call(n.op, a, number(0));
+          break;
+        case Op::Fmod:
+        case Op::Pow:
+        case Op::Atan2:
+          v = math_call(n.op, a, c);
+          break;
+        case Op::Clip:
+          v = minimum_maximum(Op::Max, minimum_maximum(Op::Min, a, d), c);
           break;
         case Op::Lt:
           v = cmp(LLVMRealOLT, a, c);
