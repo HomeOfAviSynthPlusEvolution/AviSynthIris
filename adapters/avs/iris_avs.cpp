@@ -41,13 +41,11 @@ AVS_VideoFrame* AVSC_CC frame(AVS_FilterInfo* fi, int n) {
         int error = 0;
         char type = api.avs_prop_get_type(fi->env, map, dep.name);
         if (type == 'f')
-          properties[slot] = float(api.avs_prop_get_float(fi->env, map, dep.name, 0, &error));
+          properties[slot] = api.avs_prop_get_float_saturated(fi->env, map, dep.name, 0, &error);
         else if (type == 'i')
           properties[slot] = float(api.avs_prop_get_int(fi->env, map, dep.name, 0, &error));
-        else
-          error = 1;
         if (error)
-          throw std::runtime_error(std::string("IrisPoC: missing or non-numeric property ") + dep.name);
+          properties[slot] = 0.0f;
       }
       iris_context* raw = nullptr;
       ensure(iris_context_create(plan, &raw, &d), d);

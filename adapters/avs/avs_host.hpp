@@ -35,7 +35,10 @@
   X(avs_get_frame_props_rw) \
   X(avs_prop_get_type) \
   X(avs_prop_get_float) \
+  X(avs_prop_get_float_saturated) \
   X(avs_prop_get_int) \
+  X(avs_prop_set_int) \
+  X(avs_prop_set_data) \
   X(avs_prop_set_float)
 // clang-format on
 
