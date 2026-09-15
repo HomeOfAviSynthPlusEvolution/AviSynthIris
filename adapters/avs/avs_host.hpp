@@ -31,6 +31,12 @@
   X(avs_get_read_ptr_p) \
   X(avs_get_write_ptr_p) \
   X(avs_new_video_frame_p) \
+  X(avs_new_video_frame_a) \
+  X(avs_num_components) \
+  X(avs_bits_per_component) \
+  X(avs_get_plane_width_subsampling) \
+  X(avs_get_plane_height_subsampling) \
+  X(avs_get_audio) \
   X(avs_get_frame_props_ro) \
   X(avs_get_frame_props_rw) \
   X(avs_prop_get_type) \
@@ -57,6 +63,7 @@ inline AVS_Value make_avs_error(const char* text) {
 
 struct AvsApi {
   HMODULE handle = nullptr;
+  bool owns_handle = true;
 #define FIELD(name) name##_func name = nullptr;
   IRIS_AVS_FUNCTIONS(FIELD)
 #undef FIELD
@@ -65,20 +72,29 @@ struct AvsApi {
     if (!handle)
       throw std::runtime_error("cannot load specified AVS runtime, Windows error " + std::to_string(GetLastError()));
     try {
-#define LOAD(name)                                                                                                     \
-  name = reinterpret_cast<name##_func>(GetProcAddress(handle, #name));                                                 \
-  if (!name)                                                                                                           \
-    throw std::runtime_error("AVS missing " #name);
-      IRIS_AVS_FUNCTIONS(LOAD)
-#undef LOAD
+      resolve();
     } catch (...) {
       FreeLibrary(handle);
       handle = nullptr;
       throw;
     }
   }
+  // Plugins borrow the runtime already loaded by their host.
+  explicit AvsApi(HMODULE module) : handle(module), owns_handle(false) {
+    if (!handle)
+      throw std::runtime_error("AviSynth runtime is not loaded in this process");
+    resolve();
+  }
+  void resolve() {
+#define LOAD(name)                                                                                                     \
+  name = reinterpret_cast<name##_func>(GetProcAddress(handle, #name));                                                 \
+  if (!name)                                                                                                           \
+    throw std::runtime_error("AVS missing " #name);
+    IRIS_AVS_FUNCTIONS(LOAD)
+#undef LOAD
+  }
   ~AvsApi() {
-    if (handle)
+    if (handle && owns_handle)
       FreeLibrary(handle);
   }
   AvsApi(const AvsApi&) = delete;
@@ -109,3 +125,4 @@ struct AvsClip {
   AvsClip(const AvsClip&) = delete;
 };
 void register_iris_avs(AvsApi&, AVS_ScriptEnvironment*);
+void register_iris_expr_avs(AvsApi&, AVS_ScriptEnvironment*);
