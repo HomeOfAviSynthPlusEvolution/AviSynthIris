@@ -32,14 +32,14 @@ float evaluate(Op op, float a, float b, float c) noexcept {
     case Op::Max:
       if (std::isnan(a) || std::isnan(b))
         return std::numeric_limits<float>::quiet_NaN();
-      if (a == 0 && b == 0)
-        return std::copysign(0.0f, op == Op::Min ? (std::signbit(a) || std::signbit(b) ? -1.0f : 1.0f)
-                                                 : (std::signbit(a) && std::signbit(b) ? -1.0f : 1.0f));
-      return op == Op::Min ? (a < b ? a : b) : (a > b ? a : b);
+      {
+        float result = op == Op::Min ? (a < b ? a : b) : (a > b ? a : b);
+        return result == 0.0f ? 0.0f : result;
+      }
     case Op::Abs:
       return std::fabs(a);
     case Op::Sqrt:
-      return std::sqrt(a < 0.0f ? 0.0f : a);
+      return std::sqrt(a <= 0.0f ? 0.0f : a);
     case Op::Lt:
       return a < b;
     case Op::Le:

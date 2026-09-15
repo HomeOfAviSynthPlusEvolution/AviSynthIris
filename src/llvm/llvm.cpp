@@ -92,11 +92,7 @@ struct Lowering {
   }
   LLVMValueRef minimum_maximum(Op op, LLVMValueRef a, LLVMValueRef c) {
     auto ordinary = select(cmp(op == Op::Min ? LLVMRealOLT : LLVMRealOGT, a, c), a, c);
-    // For two zeros, OR signs for min and AND signs for max.
-    auto ab = LLVMBuildBitCast(b, a, i32, ""), cb = LLVMBuildBitCast(b, c, i32, "");
-    auto bits = op == Op::Min ? LLVMBuildOr(b, ab, cb, "") : LLVMBuildAnd(b, ab, cb, "");
-    auto zeros = LLVMBuildAnd(b, cmp(LLVMRealOEQ, a, number(0)), cmp(LLVMRealOEQ, c, number(0)), "");
-    auto result = select(zeros, LLVMBuildBitCast(b, bits, f32, ""), ordinary);
+    auto result = select(cmp(LLVMRealOEQ, ordinary, number(0)), number(0), ordinary);
     return select(cmp(LLVMRealUNO, a, c), number(std::numeric_limits<float>::quiet_NaN()), result);
   }
   void output(LLVMValueRef value, const Program& p) {
@@ -193,7 +189,7 @@ struct Lowering {
           v = intrinsic("llvm.fabs.f32", a);
           break;
         case Op::Sqrt:
-          v = intrinsic("llvm.sqrt.f32", select(cmp(LLVMRealOLT, a, number(0)), number(0), a));
+          v = intrinsic("llvm.sqrt.f32", select(cmp(LLVMRealOLE, a, number(0)), number(0), a));
           break;
         case Op::Lt:
           v = cmp(LLVMRealOLT, a, c);
