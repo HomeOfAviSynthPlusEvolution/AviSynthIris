@@ -332,6 +332,110 @@ void property_contract(AvsApi& api, AVS_ScriptEnvironment* env, const char* back
   }
   std::cout << "Property contract passed: " << (backend ? backend : "Expr scalar request") << '\n';
 }
+void expect_script_error(AvsApi& api, AVS_ScriptEnvironment* env, const std::string& script,
+                         const std::vector<std::string>& messages) {
+  auto value = api.avs_invoke(env, "Eval", make_avs_string(script.c_str()), nullptr);
+  std::string error = avs_is_error(value) ? avs_as_error(value) : "";
+  api.avs_release_value(value);
+  if (error.empty())
+    throw std::runtime_error("expected script error: " + script);
+  for (const auto& message : messages)
+    if (error.find(message) == std::string::npos)
+      throw std::runtime_error("missing diagnostic '" + message + "': " + error);
+}
+void lut_adapter(AvsApi& api, AVS_ScriptEnvironment* env, const char* backend) {
+  std::string suffix = ",backend=\"" + std::string(backend) + "\")";
+  std::string blank = "BlankClip(width=18,height=10,length=3,pixel_type=\"YV12\")";
+  std::string fixture = "IrisFixture(" + blank + ")";
+  auto snapshot = script_clip(api, env, "IrisExpr(" + fixture + ",\"x x.Gain * width + height +\",lut=1" + suffix);
+  auto baseline = script_clip(api, env, "Expr(" + fixture + ",\"x x.Gain * width + height +\",lut=1)");
+  for (int n : {2, 0, 1}) {
+    AvsFrame frame(api, api.avs_get_frame(snapshot->clip, n));
+    AvsFrame reference(api, api.avs_get_frame(baseline->clip, n));
+    if (!frame.frame || !reference.frame)
+      throw std::runtime_error("LUT snapshot frame failed");
+    int error = 0;
+    auto gain = api.avs_prop_get_float(env, api.avs_get_frame_props_ro(env, frame.frame), "Gain", 0, &error);
+    if (error || gain != n + 1)
+      throw std::runtime_error("LUT changed inherited frame properties");
+    for (int p = 0; p < 3; ++p) {
+      int w = p ? 9 : 18, h = p ? 5 : 10;
+      auto* data = api.avs_get_read_ptr_p(frame.frame, planes[p]);
+      auto* ref = api.avs_get_read_ptr_p(reference.frame, planes[p]);
+      int pitch = api.avs_get_pitch_p(frame.frame, planes[p]);
+      int ref_pitch = api.avs_get_pitch_p(reference.frame, planes[p]);
+      for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x)
+          if (data[y * pitch + x] != 3 + p * 7 + x + y + w + h || data[y * pitch + x] != ref[y * ref_pitch + x])
+            throw std::runtime_error("LUT snapshot/geometry/baseline mismatch");
+    }
+  }
+  auto property_only =
+      script_clip(api, env, "IrisExpr(IrisForbidden(" + blank + ")," + fixture + ",\"y.Gain\",lut=2" + suffix);
+  for (int n : {2, 1, 0})
+    check_uniform(api, property_only->clip, {1, 1, 1}, n);
+  auto constant = script_clip(api, env, "IrisExpr(IrisForbidden(" + blank + "),\"42\",lut=1" + suffix);
+  check_uniform(api, constant->clip, {42, 42, 42});
+  auto missing = script_clip(api, env, "IrisExpr(" + fixture + ",\"x.Text x.Missing + x.Integer +\",lut=1" + suffix);
+  check_uniform(api, missing->clip, {7, 7, 7}, 2);
+  for (const char* type : {"Y8", "Y10", "Y12", "Y14", "Y16", "RGBAP", "YUVA444P16"}) {
+    auto source = "Expr(BlankClip(width=7,height=3,pixel_type=\"" + std::string(type) + "\"),\"100\")";
+    auto clip = script_clip(api, env, "IrisExpr(" + source + ",\"x 2 *\",lut=1" + suffix);
+    int count = api.avs_num_components(api.avs_get_video_info(clip->clip));
+    std::vector<float> expected(size_t(count), 200);
+    if (count == 4) {
+      // Make the original alpha explicit, then verify Iris's omitted-alpha copy.
+      source =
+          "Expr(BlankClip(width=7,height=3,pixel_type=\"" + std::string(type) + "\"),\"100\",\"100\",\"100\",\"50\")";
+      clip = script_clip(api, env, "IrisExpr(" + source + ",\"x 2 *\",lut=1" + suffix);
+      expected[3] = 50;
+    }
+    check_uniform(api, clip->clip, expected);
+    auto copied = script_clip(api, env, "IrisExpr(" + source + ",\"\",lut=1" + suffix);
+    std::fill(expected.begin(), expected.end(), 100);
+    if (count == 4)
+      expected[3] = 50;
+    check_uniform(api, copied->clip, expected);
+  }
+  std::string ten = "Expr(BlankClip(width=7,height=3,pixel_type=\"YUV444P10\"),\"100\")";
+  for (int budget : {6, -1}) {
+    auto clip = script_clip(
+        api, env, "IrisExpr(" + ten + "," + ten + ",\"x y +\",lut=2,lut_max_mb=" + std::to_string(budget) + suffix);
+    check_uniform(api, clip->clip, {200, 200, 200});
+  }
+  expect_script_error(api, env, "IrisExpr(" + ten + "," + ten + ",\"x y +\",lut=2,lut_max_mb=5" + suffix,
+                      {"6291456 bytes", "lut_max_mb=5", "lut_max_mb=6", "lut_max_mb=-1"});
+  std::string large = "IrisForbidden(BlankClip(width=7,height=3,pixel_type=\"Y16\"))";
+  expect_script_error(api, env, "IrisExpr(" + large + "," + large + ",\"x y + x.Gain +\",lut=2" + suffix,
+                      {"8589934592 bytes", "lut_max_mb=256", "lut_max_mb=8192", "lut_max_mb=-1"});
+  auto small_large = script_clip(api, env, "IrisExpr(" + large + "," + large + ",\"7\",lut=2,lut_max_mb=1" + suffix);
+  check_uniform(api, small_large->clip, {7});
+  std::string eight = "Expr(BlankClip(width=7,height=3,pixel_type=\"Y8\"),\"200\")";
+  std::string twelve = "Expr(BlankClip(width=7,height=3,pixel_type=\"Y12\"),\"1000\")";
+  auto mixed = script_clip(api, env, "IrisExpr(" + eight + "," + twelve + ",\"x y -\",format=\"Y32\",lut=2" + suffix);
+  check_uniform(api, mixed->clip, {-800});
+  for (const char* expression : {"sx", "sy", "sxr", "syr", "frameno", "time", "x[0,0]", "time unused^ x"})
+    expect_script_error(api, env, "IrisExpr(" + blank + ",\"" + expression + "\",lut=1" + suffix,
+                        {"manual LUT does not support"});
+  expect_script_error(api, env, "IrisExpr(" + blank + ",\"x\",lut=2" + suffix, {"input clip count"});
+  expect_script_error(api, env, "IrisExpr(" + blank + ",\"x\",lut=3" + suffix, {"lut must be"});
+  for (int budget : {0, -2})
+    expect_script_error(api, env, "IrisExpr(" + blank + ",\"x\",lut=1,lut_max_mb=" + std::to_string(budget) + suffix,
+                        {"lut_max_mb must be"});
+  expect_script_error(api, env, "IrisExpr(BlankClip(pixel_type=\"Y32\"),\"x\",lut=1" + suffix,
+                      {"manual LUT requires integer inputs"});
+  expect_script_error(api, env, "IrisExpr(IrisForbidden(" + blank + "),\"x.Gain\",lut=1" + suffix,
+                      {"LUT frame 0 property snapshot failed"});
+  auto corrected = script_clip(api, env, "IrisExpr(" + blank + ",\"cmin 2 *\",scale_inputs=\"floatUV\",lut=1" + suffix);
+  check_uniform(api, corrected->clip, {32, 32, 32});
+#ifndef IRIS_TEST_LLVM
+  expect_script_error(api, env, "IrisExpr(" + blank + ",\"x\",lut=1,backend=\"llvm\")", {"LLVM was disabled"});
+#endif
+  auto prefetched = script_clip(api, env, "IrisExpr(" + fixture + ",\"x.Gain\",lut=1" + suffix + ".Prefetch(4)");
+  for (int n : {2, 0, 1})
+    check_uniform(api, prefetched->clip, {1, 1, 1}, n);
+  std::cout << "Manual LUT plugin snapshots, formats, aggregate budgets and diagnostics passed: " << backend << '\n';
+}
 } // namespace
 int wmain(int argc, wchar_t** argv) {
   try {
@@ -368,11 +472,13 @@ int wmain(int argc, wchar_t** argv) {
       test(api, env, "scalar", false);
       test(api, env, "scalar", true);
       expr_adapter(api, env, "scalar");
+      lut_adapter(api, env, "scalar");
 #ifdef IRIS_TEST_LLVM
       property_contract(api, env, "llvm");
       test(api, env, "llvm", false);
       test(api, env, "llvm", true);
       expr_adapter(api, env, "llvm");
+      lut_adapter(api, env, "llvm");
 #endif
     } catch (...) {
       api.avs_delete_script_environment(env);

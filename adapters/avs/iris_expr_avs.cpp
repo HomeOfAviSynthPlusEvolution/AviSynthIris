@@ -1,4 +1,5 @@
 #include "avs_host.hpp"
+#include "runtime/manual_lut.hpp"
 #include <iris/iris.h>
 #include <array>
 #include <memory>
@@ -14,6 +15,7 @@ struct ContextDelete {
 };
 struct Plane {
   std::unique_ptr<iris_plan, PlanDelete> plan;
+  std::unique_ptr<iris::ManualLut> lut;
   iris_plan_info info{};
   std::vector<iris_property_dependency> properties;
   int id = 0;
@@ -56,6 +58,24 @@ int input_plane(Filter& f, size_t input, int output_index) {
     throw std::runtime_error("IrisExpr: expression references a missing input plane");
   return plane_id(vi, output_index);
 }
+std::vector<float> read_properties(AvsApi& api, AVS_ScriptEnvironment* env,
+                                   const std::vector<iris_property_dependency>& dependencies,
+                                   const std::vector<std::unique_ptr<AvsFrame>>& sources) {
+  std::vector<float> properties(dependencies.size());
+  for (size_t slot = 0; slot < properties.size(); ++slot) {
+    const auto& dep = dependencies[slot];
+    const auto* map = api.avs_get_frame_props_ro(env, sources[dep.input]->frame);
+    char type = api.avs_prop_get_type(env, map, dep.name);
+    int error = 0;
+    if (type == 'f')
+      properties[slot] = api.avs_prop_get_float_saturated(env, map, dep.name, 0, &error);
+    else if (type == 'i')
+      properties[slot] = float(api.avs_prop_get_int(env, map, dep.name, 0, &error));
+    if (error)
+      properties[slot] = 0;
+  }
+  return properties;
+}
 AVS_VideoFrame* AVSC_CC get_frame(AVS_FilterInfo* fi, int n) {
   auto& f = *static_cast<Filter*>(fi->user_data);
   auto& api = f.api;
@@ -87,19 +107,17 @@ AVS_VideoFrame* AVSC_CC get_frame(AVS_FilterInfo* fi, int n) {
                       size_t(api.avs_get_row_size_p(output.frame, plane.id)));
         continue;
       }
-      std::vector<float> properties(plane.properties.size());
-      for (size_t slot = 0; slot < properties.size(); ++slot) {
-        const auto& dep = plane.properties[slot];
-        const auto* map = api.avs_get_frame_props_ro(fi->env, sources[dep.input]->frame);
-        char type = api.avs_prop_get_type(fi->env, map, dep.name);
-        int error = 0;
-        if (type == 'f')
-          properties[slot] = api.avs_prop_get_float_saturated(fi->env, map, dep.name, 0, &error);
-        else if (type == 'i')
-          properties[slot] = float(api.avs_prop_get_int(fi->env, map, dep.name, 0, &error));
-        if (error)
-          properties[slot] = 0;
+      if (plane.lut) {
+        std::array<iris_input_plane, 2> inputs{};
+        for (size_t j = 0; j < f.inputs.size(); ++j)
+          if (plane.info.input_mask & (1u << j)) {
+            int id = input_plane(f, j, i);
+            inputs[j] = {api.avs_get_read_ptr_p(sources[j]->frame, id), api.avs_get_pitch_p(sources[j]->frame, id)};
+          }
+        plane.lut->apply(inputs.data(), {dst, pitch}, plane.info.width, plane.info.height);
+        continue;
       }
+      auto properties = read_properties(api, fi->env, plane.properties, sources);
       iris_diagnostic d{};
       iris_context* raw = nullptr;
       check(iris_context_create(plane.plan.get(), &raw, &d), d);
@@ -141,6 +159,10 @@ bool bool_option(AVS_Value args, int index, bool fallback) {
   auto value = avs_array_elt(args, index);
   return avs_defined(value) ? avs_as_bool(value) != 0 : fallback;
 }
+int int_option(AVS_Value args, int index, int fallback) {
+  auto value = avs_array_elt(args, index);
+  return avs_defined(value) ? avs_as_int(value) : fallback;
+}
 AVS_Value AVSC_CC create(AVS_ScriptEnvironment* env, AVS_Value args, void* user) {
   auto& api = *static_cast<AvsApi*>(user);
   try {
@@ -150,6 +172,13 @@ AVS_Value AVSC_CC create(AVS_ScriptEnvironment* env, AVS_Value args, void* user)
     int inputs = avs_array_size(clips), expr_count = avs_array_size(expressions);
     if (inputs < 1 || inputs > 26)
       throw std::runtime_error("IrisExpr: expected 1..26 clips");
+    int lut_mode = int_option(args, 8, 0);
+    int lut_max_mb = int_option(args, 9, 256);
+    iris::check_lut_budget(0, lut_max_mb);
+    if (lut_mode < 0 || lut_mode > 2)
+      throw std::runtime_error("IrisExpr: lut must be 0, 1 or 2");
+    if (lut_mode && inputs != lut_mode)
+      throw std::runtime_error("IrisExpr: input clip count must equal the LUT dimension");
     for (int i = 0; i < inputs; ++i) {
       auto clip = std::make_unique<AvsClip>(api, api.avs_take_clip(avs_array_elt(clips, i), env));
       if (!clip->clip)
@@ -157,6 +186,8 @@ AVS_Value AVSC_CC create(AVS_ScriptEnvironment* env, AVS_Value args, void* user)
       auto vi = *api.avs_get_video_info(clip->clip);
       if (!avs_is_planar(&vi))
         throw std::runtime_error("IrisExpr: planar input required");
+      if (lut_mode && format(api, vi).type == IRIS_F32)
+        throw std::runtime_error("IrisExpr: manual LUT requires integer inputs; use lut=0 for floating-point inputs");
       if (!f->formats.empty()) {
         const auto& first = f->formats[0];
         if (vi.width != first.width || vi.height != first.height ||
@@ -243,6 +274,8 @@ AVS_Value AVSC_CC create(AVS_ScriptEnvironment* env, AVS_Value args, void* user)
         std::unique_ptr<iris_plan, PlanDelete> validated(probe);
         plane.info.input_mask = 1;
       } else {
+        if (lut_mode)
+          iris::validate_lut_source(expression);
         iris_plan* raw = nullptr;
         iris_diagnostic d{};
         auto status = iris_compile_expr_v1(expression.c_str(), &o, &e, &raw, &d);
@@ -256,6 +289,8 @@ AVS_Value AVSC_CC create(AVS_ScriptEnvironment* env, AVS_Value args, void* user)
           f->used |= 1u << plane.properties[slot].input;
         }
         f->used |= plane.info.input_mask;
+        if (lut_mode)
+          plane.lut = std::make_unique<iris::ManualLut>(*raw, o.backend);
       }
       for (int j = 0; j < inputs; ++j) {
         // Geometry is a compile-time contract, even for currently unused inputs.
@@ -266,6 +301,29 @@ AVS_Value AVSC_CC create(AVS_ScriptEnvironment* env, AVS_Value args, void* user)
         if (width(api, f->formats[j], source_plane) != o.width || height(api, f->formats[j], source_plane) != o.height)
           throw std::runtime_error("IrisExpr: input and output plane geometry must match");
       }
+    }
+    if (lut_mode) {
+      uint64_t total = 0;
+      uint32_t property_inputs = 0;
+      for (const auto& plane : f->planes) {
+        if (!plane.lut)
+          continue;
+        total = iris::lut_add_bytes(total, plane.lut->storage_bytes());
+        for (const auto& dep : plane.properties)
+          property_inputs |= 1u << dep.input;
+      }
+      // Check the complete filter before allocating any table or requesting frame 0.
+      iris::check_lut_budget(total, lut_max_mb);
+      std::vector<std::unique_ptr<AvsFrame>> snapshots(f->inputs.size());
+      for (size_t j = 0; j < f->inputs.size(); ++j)
+        if (property_inputs & (1u << j)) {
+          snapshots[j] = std::make_unique<AvsFrame>(api, api.avs_get_frame(f->inputs[j]->clip, 0));
+          if (!snapshots[j]->frame)
+            throw std::runtime_error("IrisExpr: LUT frame 0 property snapshot failed for input " + std::to_string(j));
+        }
+      for (auto& plane : f->planes)
+        if (plane.lut)
+          plane.lut->build(read_properties(api, env, plane.properties, snapshots));
     }
     AVS_FilterInfo* fi = nullptr;
     AvsClip result(api, api.avs_new_c_filter(env, &fi, avs_array_elt(clips, 0), 1));
@@ -279,6 +337,8 @@ AVS_Value AVSC_CC create(AVS_ScriptEnvironment* env, AVS_Value args, void* user)
     AVS_Value value{};
     api.avs_set_to_clip(&value, result.clip);
     return value;
+  } catch (const iris::Error& e) {
+    return make_avs_error(api.avs_save_string(env, (std::string("IrisExpr: ") + e.what()).c_str(), -1));
   } catch (const std::exception& e) {
     return make_avs_error(api.avs_save_string(env, e.what(), -1));
   } catch (...) {
@@ -287,8 +347,9 @@ AVS_Value AVSC_CC create(AVS_ScriptEnvironment* env, AVS_Value args, void* user)
 }
 } // namespace
 void register_iris_expr_avs(AvsApi& api, AVS_ScriptEnvironment* env) {
-  if (api.avs_add_function(env, "IrisExpr",
-                           "c+s+[format]s[backend]s[scale_inputs]s[clamp_float]b[clamp_float_UV]b[optimize]b", create,
-                           &api))
+  if (api.avs_add_function(
+          env, "IrisExpr",
+          "c+s+[format]s[backend]s[scale_inputs]s[clamp_float]b[clamp_float_UV]b[optimize]b[lut]i[lut_max_mb]i", create,
+          &api))
     throw std::runtime_error("cannot register IrisExpr");
 }
