@@ -63,7 +63,8 @@ const std::unordered_map<std::string, Op> ops = {
     {"atan", Op::Atan},   {"%", Op::Fmod},      {"pow", Op::Pow},       {"^", Op::Pow},         {"atan2", Op::Atan2},
     {"clip", Op::Clip}};
 bool reserved(const std::string& s) {
-  return ops.count(s) || s == "pi" || s == "dup" || s == "swap" || s == "x" || s == "y" || s == "z";
+  return ops.count(s) || s == "pi" || s == "sxr" || s == "syr" || s == "dup" || s == "swap" || s == "x" || s == "y" ||
+         s == "z";
 }
 } // namespace
 IR parse(const std::string& source, uint32_t input_count, bool extended_inputs) {
@@ -150,6 +151,23 @@ IR parse(const std::string& source, uint32_t input_count, bool extended_inputs) 
         n.args[j] = convert(stack[stack.size() - count + j], wanted);
       }
       stack.resize(stack.size() - count);
+    } else if (t == "sxr" || t == "syr") {
+      // Expand into ordinary IR so all backends retain the same division and dependencies.
+      n.op = t == "sxr" ? Op::Sx : Op::Sy;
+      auto coordinate = emit(n);
+      n.op = t == "sxr" ? Op::Width : Op::Height;
+      auto dimension = emit(n);
+      n.op = Op::Constant;
+      n.value = 1.0f;
+      auto one = emit(n);
+      n.op = Op::Sub;
+      n.args = {dimension, one, 0};
+      auto span = emit(n);
+      n.op = Op::Max;
+      n.args = {span, one, 0};
+      auto denominator = emit(n);
+      n.op = Op::Div;
+      n.args = {coordinate, denominator, 0};
     } else if (t == "pi") {
       n.value = 3.14159265358979323846f;
     } else if (decimal(t)) {

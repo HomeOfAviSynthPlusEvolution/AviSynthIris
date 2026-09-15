@@ -925,6 +925,45 @@ void guard_pages() {
       }
 #endif
 }
+void normalized_coordinates() {
+  for (int optimize : {0, 1})
+    for (auto dimensions : {std::pair{1u, 1u}, {1u, 17u}, {17u, 1u}, {7u, 3u}, {1920u, 2u}})
+      for (bool horizontal : {false, true}) {
+        auto [width, height] = dimensions;
+        auto o = options(width, height, optimize);
+        o.input_count = 1;
+        o.inputs[0] = {IRIS_U8, 8};
+        Compiled p(horizontal ? "sxr" : "syr", o, 1);
+        CHECK(p.info().strategy == IRIS_COMPUTE);
+        CHECK(p.info().input_mask == 0);
+        CHECK(p.info().metadata_mask == (horizontal ? IRIS_DEP_SX | IRIS_DEP_WIDTH : IRIS_DEP_SY | IRIS_DEP_HEIGHT));
+        std::vector<float> output(size_t(width) * height);
+        iris_execute_args args{};
+        args.output = {output.data(), ptrdiff_t(width) * 4};
+        CHECK(iris_execute(p.p, p.c, &args, nullptr) == IRIS_OK);
+        auto dimension = horizontal ? width : height;
+        for (unsigned y = 0; y < height; ++y)
+          for (unsigned x = 0; x < width; ++x) {
+            auto coordinate = horizontal ? x : y;
+            float expected = dimension == 1 ? 0.0f : float(coordinate) / float(dimension - 1);
+            CHECK(same(output[size_t(y) * width + x], expected));
+          }
+      }
+  for (const char* expression : {"1 sxr@", "1 syr^"}) {
+    auto o = options();
+    iris_plan* p = nullptr;
+    iris_diagnostic d{};
+    CHECK(iris_compile(expression, &o, &p, &d) == IRIS_PARSE_ERROR);
+    CHECK(p == nullptr && d.offset == 2 && d.length == 4);
+  }
+  std::string oversized;
+  for (unsigned i = 0; i < 1400; ++i)
+    oversized += "sxr V^ ";
+  oversized += "0";
+  auto o = options();
+  iris_plan* p = nullptr;
+  CHECK(iris_compile(oversized.c_str(), &o, &p, nullptr) == IRIS_LIMIT_EXCEEDED && p == nullptr);
+}
 void extended_execution() {
   iris_compile_options_v1 o{};
   o.struct_size = sizeof(o);
@@ -994,6 +1033,7 @@ int main(int argc, char** argv) {
     lut_tables();
     guard_pages();
     extended_execution();
+    normalized_coordinates();
     std::cout << "All Iris checks passed (250 expressions x 15 differential inputs; 8 threads x 200 calls; guard "
                  "pages), backend="
               << test_backend << ".\n";
