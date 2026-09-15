@@ -191,6 +191,25 @@ struct Lowering {
         case Op::Sqrt:
           v = intrinsic("llvm.sqrt.f32", select(cmp(LLVMRealOLE, a, number(0)), number(0), a));
           break;
+        case Op::Neg:
+          v = LLVMBuildFNeg(b, a, "");
+          break;
+        case Op::Sgn:
+          v = select(cmp(LLVMRealOLT, a, number(0)), number(-1),
+                     select(cmp(LLVMRealOGT, a, number(0)), number(1), number(0)));
+          break;
+        case Op::Round:
+          v = intrinsic("llvm.round.f32", a);
+          break;
+        case Op::Floor:
+          v = intrinsic("llvm.floor.f32", a);
+          break;
+        case Op::Ceil:
+          v = intrinsic("llvm.ceil.f32", a);
+          break;
+        case Op::Trunc:
+          v = intrinsic("llvm.trunc.f32", a);
+          break;
         case Op::Lt:
           v = cmp(LLVMRealOLT, a, c);
           break;

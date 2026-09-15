@@ -52,12 +52,13 @@ bool decimal(std::string_view s) {
   return i == s.size();
 }
 const std::unordered_map<std::string, Op> ops = {
-    {"+", Op::Add},   {"-", Op::Sub},       {"*", Op::Mul},         {"/", Op::Div},         {"min", Op::Min},
-    {"max", Op::Max}, {"abs", Op::Abs},     {"sqrt", Op::Sqrt},     {"<", Op::Lt},          {"<=", Op::Le},
-    {"=", Op::Eq},    {"!=", Op::Ne},       {">=", Op::Ge},         {">", Op::Gt},          {"and", Op::And},
-    {"or", Op::Or},   {"xor", Op::Xor},     {"not", Op::Not},       {"?", Op::Select},      {"sx", Op::Sx},
-    {"sy", Op::Sy},   {"width", Op::Width}, {"height", Op::Height}, {"frameno", Op::Frame}, {"==", Op::Eq},
-    {"&", Op::And},   {"|", Op::Or}};
+    {"+", Op::Add},       {"-", Op::Sub},       {"*", Op::Mul},         {"/", Op::Div},         {"min", Op::Min},
+    {"max", Op::Max},     {"abs", Op::Abs},     {"sqrt", Op::Sqrt},     {"<", Op::Lt},          {"<=", Op::Le},
+    {"=", Op::Eq},        {"!=", Op::Ne},       {">=", Op::Ge},         {">", Op::Gt},          {"and", Op::And},
+    {"or", Op::Or},       {"xor", Op::Xor},     {"not", Op::Not},       {"?", Op::Select},      {"sx", Op::Sx},
+    {"sy", Op::Sy},       {"width", Op::Width}, {"height", Op::Height}, {"frameno", Op::Frame}, {"==", Op::Eq},
+    {"&", Op::And},       {"|", Op::Or},        {"neg", Op::Neg},       {"sgn", Op::Sgn},       {"round", Op::Round},
+    {"floor", Op::Floor}, {"ceil", Op::Ceil},   {"trunc", Op::Trunc}};
 bool reserved(const std::string& s) {
   return ops.count(s) || s == "dup" || s == "swap" || s == "x" || s == "y" || s == "z";
 }

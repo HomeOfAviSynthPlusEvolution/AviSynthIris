@@ -7,7 +7,8 @@ namespace iris {
 unsigned arity(Op op) {
   if (op <= Op::Frame)
     return 0;
-  if (op == Op::ToBool || op == Op::ToNumber || op == Op::Abs || op == Op::Sqrt || op == Op::Not)
+  if (op == Op::ToBool || op == Op::ToNumber || op == Op::Abs || op == Op::Sqrt || op == Op::Not ||
+      (op >= Op::Neg && op <= Op::Trunc))
     return 1;
   return op == Op::Select ? 3 : 2;
 }
@@ -40,6 +41,18 @@ float evaluate(Op op, float a, float b, float c) noexcept {
       return std::fabs(a);
     case Op::Sqrt:
       return std::sqrt(a <= 0.0f ? 0.0f : a);
+    case Op::Neg:
+      return -a;
+    case Op::Sgn:
+      return a < 0 ? -1.0f : a > 0 ? 1.0f : 0.0f;
+    case Op::Round:
+      return std::round(a);
+    case Op::Floor:
+      return std::floor(a);
+    case Op::Ceil:
+      return std::ceil(a);
+    case Op::Trunc:
+      return std::trunc(a);
     case Op::Lt:
       return a < b;
     case Op::Le:
@@ -147,10 +160,11 @@ void optimize(IR& ir) {
   ir.properties = std::move(props);
 }
 std::string dump(const IR& ir) {
-  static const char* names[] = {"const",   "input",     "property", "sx",  "sy",    "width", "height", "frameno",
-                                "to_bool", "to_number", "add",      "sub", "mul",   "div",   "min",    "max",
-                                "abs",     "sqrt",      "lt",       "le",  "eq",    "ne",    "ge",     "gt",
-                                "and",     "or",        "xor",      "not", "select"};
+  static const char* names[] = {"const",   "input",   "property",  "sx",   "sy",  "width", "height",
+                                "frameno", "to_bool", "to_number", "add",  "sub", "mul",   "div",
+                                "min",     "max",     "abs",       "sqrt", "neg", "sgn",   "round",
+                                "floor",   "ceil",    "trunc",     "lt",   "le",  "eq",    "ne",
+                                "ge",      "gt",      "and",       "or",   "xor", "not",   "select"};
   std::ostringstream s;
   s << std::setprecision(9);
   for (size_t i = 0; i < ir.nodes.size(); ++i) {
