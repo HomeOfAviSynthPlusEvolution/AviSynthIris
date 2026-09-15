@@ -60,6 +60,30 @@ typedef struct iris_execute_args {
   const float* properties;
   size_t property_count;
 } iris_execute_args;
+/* Versioned layouts are frozen. Set struct_size to sizeof the exact v1 type.
+   New input tokens use x/y/z/a..w. Legacy entry points keep their 3-input grammar. */
+#define IRIS_API_VERSION 1u
+#define IRIS_MAX_INPUTS_V1 26u
+typedef struct iris_compile_options_v1 {
+  size_t struct_size;
+  uint32_t width, height, input_count;
+  iris_format inputs[IRIS_MAX_INPUTS_V1], output;
+  int optimize;
+  iris_backend backend;
+  int enable_lut;
+} iris_compile_options_v1;
+typedef struct iris_execute_args_v1 {
+  size_t struct_size;
+  uint32_t input_count;
+  iris_input_plane inputs[IRIS_MAX_INPUTS_V1];
+  iris_output_plane output;
+  uint64_t frameno;
+  const float* properties;
+  size_t property_count;
+} iris_execute_args_v1;
+uint32_t iris_get_api_version(void);
+iris_status iris_compile_v1(const char*, const iris_compile_options_v1*, iris_plan**, iris_diagnostic*);
+iris_status iris_execute_v1(const iris_plan*, iris_context*, const iris_execute_args_v1*, iris_diagnostic*);
 /* Expression is NUL terminated, <=65536 bytes. Diagnostics are optional.
    All failures clear output handles. Other pointers are required unless documented. */
 iris_status iris_compile(const char*, const iris_compile_options*, iris_plan**, iris_diagnostic*);

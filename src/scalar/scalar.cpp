@@ -36,7 +36,7 @@ void write(unsigned char* p, iris_format f, float v) noexcept {
   }
 }
 } // namespace
-void run(const Program& p, std::vector<float>& v, const iris_execute_args& a) noexcept {
+void run(const Program& p, std::vector<float>& v, const ExecuteArgs& a) noexcept {
   const auto& o = p.options;
   const auto& ir = p.ir;
   const size_t out_size = o.output.type == IRIS_U8 ? 1 : o.output.type == IRIS_U16 ? 2 : 4;

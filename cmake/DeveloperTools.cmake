@@ -8,6 +8,7 @@ if(IRIS_CLANG_FORMAT)
     "${PROJECT_SOURCE_DIR}/adapters/*.hpp"
     "${PROJECT_SOURCE_DIR}/adapters/*.cpp"
     "${PROJECT_SOURCE_DIR}/examples/*.c"
+    "${PROJECT_SOURCE_DIR}/tests/*.c"
     "${PROJECT_SOURCE_DIR}/tests/*.cpp")
   add_custom_target(iris-format-check
     COMMAND "${IRIS_CLANG_FORMAT}" --style=file --dry-run --Werror ${iris_format_sources}

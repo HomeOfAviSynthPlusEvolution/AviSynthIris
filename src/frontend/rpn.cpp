@@ -66,7 +66,7 @@ bool reserved(const std::string& s) {
   return ops.count(s) || s == "pi" || s == "dup" || s == "swap" || s == "x" || s == "y" || s == "z";
 }
 } // namespace
-IR parse(const std::string& source, uint32_t input_count) {
+IR parse(const std::string& source, uint32_t input_count, bool extended_inputs) {
   IR ir;
   std::vector<uint32_t> stack;
   std::unordered_map<std::string, uint32_t> vars;
@@ -159,8 +159,9 @@ IR parse(const std::string& source, uint32_t input_count) {
       auto r = std::from_chars(begin, t.data() + t.size(), n.value, std::chars_format::general);
       if (r.ec != std::errc{} || r.ptr != t.data() + t.size() || !std::isfinite(n.value))
         error("constant outside binary32 range");
-    } else if ((t[0] == 'x' || t[0] == 'y' || t[0] == 'z') && (t.size() == 1 || t[1] == '[' || t[1] == '.')) {
-      n.input = static_cast<uint32_t>(t[0] - 'x');
+    } else if (((t[0] >= 'x' && t[0] <= 'z') || (extended_inputs && t[0] >= 'a' && t[0] <= 'w')) &&
+               (t.size() == 1 || t[1] == '[' || t[1] == '.')) {
+      n.input = static_cast<uint32_t>(t[0] >= 'x' ? t[0] - 'x' : t[0] - 'a' + 3);
       if (n.input >= input_count)
         error("input reference outside configured count");
       n.op = Op::Input;
@@ -198,7 +199,7 @@ IR parse(const std::string& source, uint32_t input_count) {
     } else if (t.back() == '@' || t.back() == '^') {
       const char mode = t.back();
       t.pop_back();
-      if (!identifier(t) || reserved(t))
+      if (!identifier(t) || reserved(t) || (extended_inputs && t.size() == 1 && t[0] >= 'a' && t[0] <= 'w'))
         error("invalid or reserved variable name");
       if (vars.size() >= max_nodes && vars.find(t) == vars.end())
         throw Error(IRIS_LIMIT_EXCEEDED, "variable limit exceeded", start, len);

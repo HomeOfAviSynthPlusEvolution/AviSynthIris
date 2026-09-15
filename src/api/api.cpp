@@ -32,8 +32,8 @@ extern "C" {
 iris_status iris_compile(const char* s, const iris_compile_options* o, iris_plan** out, iris_diagnostic* d) {
   return iris_compile_ex(s, o, IRIS_BACKEND_SCALAR, 0, out, d);
 }
-iris_status iris_compile_ex(const char* s, const iris_compile_options* o, iris_backend backend, int enable_lut,
-                            iris_plan** out, iris_diagnostic* d) {
+static iris_status compile_normalized(const char* s, const iris::CompileOptions* o, iris_backend backend,
+                                      int enable_lut, iris_plan** out, iris_diagnostic* d) {
   if (out)
     *out = nullptr;
   return guard(d, [&] {
@@ -51,7 +51,7 @@ iris_status iris_compile_ex(const char* s, const iris_compile_options* o, iris_b
       throw iris::Error(IRIS_LIMIT_EXCEEDED, "expression length limit exceeded");
     auto p = std::make_shared<iris::Program>();
     p->options = *o;
-    p->ir = iris::parse(std::string(s, len), o->input_count);
+    p->ir = iris::parse(std::string(s, len), o->input_count, o->extended_inputs);
     iris::verify(p->ir);
     if (o->optimize) {
       iris::optimize(p->ir);
@@ -64,6 +64,33 @@ iris_status iris_compile_ex(const char* s, const iris_compile_options* o, iris_b
       p->jit = iris::compile_llvm(*p);
     *out = new iris_plan{std::move(p)};
   });
+}
+iris_status iris_compile_ex(const char* s, const iris_compile_options* o, iris_backend backend, int enable_lut,
+                            iris_plan** out, iris_diagnostic* d) {
+  if (!o)
+    return compile_normalized(s, nullptr, backend, enable_lut, out, d);
+  iris::CompileOptions options(*o);
+  return compile_normalized(s, &options, backend, enable_lut, out, d);
+}
+uint32_t iris_get_api_version(void) {
+  return IRIS_API_VERSION;
+}
+iris_status iris_compile_v1(const char* s, const iris_compile_options_v1* o, iris_plan** out, iris_diagnostic* d) {
+  if (out)
+    *out = nullptr;
+  iris::CompileOptions options;
+  auto status = guard(d, [&] {
+    if (!o || o->struct_size != sizeof(*o) || !s || !out)
+      iris::fail("invalid v1 compile arguments or structure size");
+    options.width = o->width;
+    options.height = o->height;
+    options.input_count = o->input_count;
+    std::copy_n(o->inputs, 26, options.inputs);
+    options.output = o->output;
+    options.optimize = o->optimize;
+    options.extended_inputs = true;
+  });
+  return status == IRIS_OK ? compile_normalized(s, &options, o->backend, o->enable_lut, out, d) : status;
 }
 void iris_plan_destroy(iris_plan* p) {
   delete p;
@@ -128,8 +155,29 @@ iris_status iris_execute(const iris_plan* p, iris_context* c, const iris_execute
       iris::fail("null execute argument");
     if (p->program != c->program)
       iris::fail("context belongs to another plan");
-    iris::validate_execution(*p->program, *a);
-    iris::execute_program(*p->program, c->values, *a);
+    if (p->program->options.input_count > 3)
+      iris::fail("plan requires the v1 execute entry point");
+    iris::ExecuteArgs args(*a);
+    iris::validate_execution(*p->program, args);
+    iris::execute_program(*p->program, c->values, args);
+  });
+}
+iris_status iris_execute_v1(const iris_plan* p, iris_context* c, const iris_execute_args_v1* a, iris_diagnostic* d) {
+  return guard(d, [&] {
+    if (!p || !c || !a || a->struct_size != sizeof(*a))
+      iris::fail("invalid v1 execute arguments or structure size");
+    if (p->program != c->program)
+      iris::fail("context belongs to another plan");
+    if (a->input_count != p->program->options.input_count)
+      iris::fail("execute input count differs from plan");
+    iris::ExecuteArgs args;
+    std::copy_n(a->inputs, 26, args.inputs);
+    args.output = a->output;
+    args.frameno = a->frameno;
+    args.properties = a->properties;
+    args.property_count = a->property_count;
+    iris::validate_execution(*p->program, args);
+    iris::execute_program(*p->program, c->values, args);
   });
 }
 }

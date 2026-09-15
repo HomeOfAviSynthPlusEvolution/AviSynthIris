@@ -87,7 +87,7 @@ struct Error : std::runtime_error {
 unsigned arity(Op);
 Type result_type(Op);
 float evaluate(Op, float, float = 0, float = 0) noexcept;
-IR parse(const std::string&, uint32_t input_count);
+IR parse(const std::string&, uint32_t input_count, bool extended_inputs = false);
 void verify(const IR&);
 void optimize(IR&);
 std::string dump(const IR&);

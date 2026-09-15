@@ -119,9 +119,9 @@ void verify(const IR& ir) {
       bad();
     if (n.op == Op::Constant && n.type == Type::Bool && n.value != 0 && n.value != 1)
       bad();
-    if (n.op == Op::Input && n.input >= 3)
+    if (n.op == Op::Input && n.input >= 26)
       bad();
-    if (n.op == Op::Property && (n.slot >= ir.properties.size() || ir.properties[n.slot].input >= 3))
+    if (n.op == Op::Property && (n.slot >= ir.properties.size() || ir.properties[n.slot].input >= 26))
       bad();
     for (unsigned j = 0; j < arity(n.op); ++j) {
       if (n.args[j] >= i)

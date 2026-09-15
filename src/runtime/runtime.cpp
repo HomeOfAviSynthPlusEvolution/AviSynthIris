@@ -9,11 +9,11 @@ namespace {
 #if defined(__clang__)
 __attribute__((no_sanitize("function"), noinline))
 #endif
-void call_jit_row(JitCode::Row row, const iris_execute_args* args, uint32_t y) noexcept {
+void call_jit_row(JitCode::Row row, const ExecuteArgs* args, uint32_t y) noexcept {
   row(args, y);
 }
 } // namespace
-void execute_program(const Program& p, std::vector<float>& scratch, const iris_execute_args& a) noexcept {
+void execute_program(const Program& p, std::vector<float>& scratch, const ExecuteArgs& a) noexcept {
   if (p.info.strategy == IRIS_LUT_U8) {
     const auto& in = a.inputs[p.lut_input];
     const auto& out = a.output;
@@ -47,7 +47,7 @@ void prepare_lut(Program& p) {
     inputs[i] = static_cast<unsigned char>(i);
   std::vector<unsigned char> table(256 * sample_bytes(p.options.output));
   std::vector<float> scratch(p.ir.nodes.size());
-  iris_execute_args args{};
+  ExecuteArgs args{};
   args.inputs[0] = {inputs, 256};
   args.output = {table.data(), ptrdiff_t(table.size())};
   run(evaluation, scratch, args);
@@ -80,10 +80,10 @@ size_t sample_bytes(iris_format f) {
   }
   fail("invalid sample format or bit depth");
 }
-void validate_options(const iris_compile_options& o) {
+void validate_options(const CompileOptions& o) {
   if (!o.width || !o.height || o.width > INT32_MAX || o.height > INT32_MAX)
     fail("dimensions must be in 1..INT32_MAX");
-  if (o.input_count > 3 || (o.optimize != 0 && o.optimize != 1))
+  if (o.input_count > (o.extended_inputs ? 26u : 3u) || (o.optimize != 0 && o.optimize != 1))
     fail("invalid input count or optimization flag");
   sample_bytes(o.output);
   for (uint32_t i = 0; i < o.input_count; ++i)
@@ -114,7 +114,7 @@ void describe(Program& p) {
     info.strategy = IRIS_COPY;
   p.text = dump(p.ir);
 }
-void validate_execution(const Program& p, const iris_execute_args& a) {
+void validate_execution(const Program& p, const ExecuteArgs& a) {
   auto plane = [&](const void* data, ptrdiff_t stride, iris_format f) {
     if (!data)
       fail("required plane data is null");

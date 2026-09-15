@@ -74,7 +74,7 @@ struct Lowering {
     return select(LLVMBuildICmp(b, LLVMIntSGE, v, integer(limit), ""), integer(limit - 1), v);
   }
   LLVMValueRef input(const Node& n, const Program& p) {
-    size_t offset = offsetof(iris_execute_args, inputs) + n.input * sizeof(iris_input_plane);
+    size_t offset = offsetof(ExecuteArgs, inputs) + n.input * sizeof(iris_input_plane);
     auto base = field(ptr, offset + offsetof(iris_input_plane, data));
     auto stride = field(iptr, offset + offsetof(iris_input_plane, stride));
     if (sizeof(ptrdiff_t) != 8)
@@ -111,8 +111,8 @@ struct Lowering {
     return call;
   }
   void output(LLVMValueRef value, const Program& p) {
-    auto base = field(ptr, offsetof(iris_execute_args, output) + offsetof(iris_output_plane, data));
-    auto stride = field(iptr, offsetof(iris_execute_args, output) + offsetof(iris_output_plane, stride));
+    auto base = field(ptr, offsetof(ExecuteArgs, output) + offsetof(iris_output_plane, data));
+    auto stride = field(iptr, offsetof(ExecuteArgs, output) + offsetof(iris_output_plane, stride));
     if (sizeof(ptrdiff_t) != 8)
       stride = LLVMBuildSExt(b, stride, i64, "");
     auto offset = LLVMBuildAdd(b, LLVMBuildMul(b, y, stride, ""),
@@ -162,8 +162,7 @@ struct Lowering {
           v = input(n, p);
           break;
         case Op::Property:
-          v = load(f32,
-                   gep(field(ptr, offsetof(iris_execute_args, properties)), integer(int64_t(n.slot) * sizeof(float))));
+          v = load(f32, gep(field(ptr, offsetof(ExecuteArgs, properties)), integer(int64_t(n.slot) * sizeof(float))));
           break;
         case Op::Sx:
           v = LLVMBuildUIToFP(b, x, f32, "");
@@ -178,7 +177,7 @@ struct Lowering {
           v = number(float(p.options.height));
           break;
         case Op::Frame:
-          v = LLVMBuildUIToFP(b, field(i64, offsetof(iris_execute_args, frameno)), f32, "");
+          v = LLVMBuildUIToFP(b, field(i64, offsetof(ExecuteArgs, frameno)), f32, "");
           break;
         case Op::ToBool:
           v = cmp(LLVMRealOGT, a, number(0));

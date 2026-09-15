@@ -925,6 +925,55 @@ void guard_pages() {
       }
 #endif
 }
+void extended_execution() {
+  iris_compile_options_v1 o{};
+  o.struct_size = sizeof(o);
+  o.width = 3;
+  o.height = 2;
+  o.input_count = 26;
+  o.backend = test_backend;
+  o.output = {IRIS_F32, 32};
+  for (auto& format : o.inputs)
+    format = {IRIS_U8, 8};
+  o.inputs[25] = {IRIS_U16, 10};
+  iris_plan* p = nullptr;
+  CHECK(iris_compile_v1("w a + frameno +", &o, &p, nullptr) == IRIS_OK);
+  std::atomic<int> failures{0};
+  std::vector<std::thread> workers;
+  for (unsigned thread = 0; thread < 8; ++thread)
+    workers.emplace_back([&, thread] {
+      iris_context* c = nullptr;
+      if (iris_context_create(p, &c, nullptr) != IRIS_OK) {
+        ++failures;
+        return;
+      }
+      uint16_t w[2][3] = {{100, 200, 300}, {400, 500, 600}};
+      uint8_t a[2][3] = {{1, 2, 3}, {4, 5, 6}};
+      float output[2][3]{};
+      iris_execute_args_v1 args{};
+      args.struct_size = sizeof(args);
+      args.input_count = 26;
+      args.inputs[3] = {a, 3};
+      args.inputs[25] = {w, 6};
+      args.output = {output, 12};
+      args.frameno = thread;
+      reject_allocation = true;
+      for (unsigned call = 0; call < 100; ++call) {
+        if (iris_execute_v1(p, c, &args, nullptr) != IRIS_OK)
+          ++failures;
+        for (unsigned y = 0; y < 2; ++y)
+          for (unsigned x = 0; x < 3; ++x)
+            if (output[y][x] != float((y * 3 + x + 1) * 101 + thread))
+              ++failures;
+      }
+      reject_allocation = false;
+      iris_context_destroy(c);
+    });
+  for (auto& worker : workers)
+    worker.join();
+  iris_plan_destroy(p);
+  CHECK(failures == 0);
+}
 int main(int argc, char** argv) {
   if (argc > 1 && std::strcmp(argv[1], "llvm") == 0)
     test_backend = IRIS_BACKEND_LLVM;
@@ -944,6 +993,7 @@ int main(int argc, char** argv) {
     frontend_independence();
     lut_tables();
     guard_pages();
+    extended_execution();
     std::cout << "All Iris checks passed (250 expressions x 15 differential inputs; 8 threads x 200 calls; guard "
                  "pages), backend="
               << test_backend << ".\n";
