@@ -106,6 +106,20 @@ int main(int argc, char** argv) {
   CHECK(output[1][2] == 2);
   iris_context_destroy(c);
   iris_plan_destroy(p);
+  {
+    iris_expr_options_v1 e = {0};
+    e.struct_size = sizeof(e);
+    e.frame_count = 3;
+    o.backend = IRIS_BACKEND_SCALAR;
+    o.input_count = 0;
+    CHECK(iris_compile_expr_v1("time", &o, &e, &p, NULL) == IRIS_OK);
+    CHECK(iris_context_create(p, &c, NULL) == IRIS_OK);
+    a.frameno = 1;
+    CHECK(iris_execute_v1(p, c, &a, NULL) == IRIS_OK);
+    CHECK(output[0][0] == 0.5f && output[1][2] == 0.5f);
+    iris_context_destroy(c);
+    iris_plan_destroy(p);
+  }
   puts("C99 v1 API and 26-input checks passed");
   return 0;
 }

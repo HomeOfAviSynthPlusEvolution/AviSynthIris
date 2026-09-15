@@ -1,4 +1,5 @@
 #include "ir/ir.hpp"
+#include "expr.hpp"
 #include <charconv>
 #include <cmath>
 #include <string_view>
@@ -67,7 +68,8 @@ bool reserved(const std::string& s) {
          s == "z";
 }
 } // namespace
-IR parse(const std::string& source, uint32_t input_count, bool extended_inputs) {
+IR parse(const std::string& source, uint32_t input_count, bool extended_inputs, const iris_format* formats,
+         const iris_expr_options_v1* expr) {
   IR ir;
   std::vector<uint32_t> stack;
   std::unordered_map<std::string, uint32_t> vars;
@@ -96,6 +98,35 @@ IR parse(const std::string& source, uint32_t input_count, bool extended_inputs) 
     if (stack.size() < n)
       error("stack underflow");
   };
+  uint32_t source_bits = 8;
+  ExprScaling scaling{expr ? expr->scale_inputs : IRIS_SCALE_NONE};
+  auto literal = [&](float value) {
+    Node n;
+    n.value = value;
+    return emit(n);
+  };
+  auto binary = [&](Op op, uint32_t value, float operand) {
+    Node n;
+    n.op = op;
+    n.args = {convert(value, Type::Number), literal(operand), 0};
+    return emit(n);
+  };
+  auto scale = [&](uint32_t value, uint32_t from, uint32_t to, bool chroma, bool full, bool shift) {
+    if (from == to)
+      return value;
+    auto source_range = expr_range(from, chroma, full);
+    auto destination_range = expr_range(to, chroma, full);
+    if (shift && chroma && to == 32 && from != 32)
+      destination_range.origin = 0.5f;
+    if (source_range.origin != 0)
+      value = binary(Op::Sub, value, source_range.origin);
+    float factor = destination_range.span / source_range.span;
+    if (factor != 1)
+      value = binary(Op::Mul, value, factor);
+    if (destination_range.origin != 0)
+      value = binary(Op::Add, value, destination_range.origin);
+    return value;
+  };
   while (pos < source.size()) {
     if (space(source[pos])) {
       ++pos;
@@ -107,6 +138,22 @@ IR parse(const std::string& source, uint32_t input_count, bool extended_inputs) 
     len = pos - start;
     std::string t = source.substr(start, len);
     Node n;
+    if (expr && (t == "i8" || t == "i10" || t == "i12" || t == "i14" || t == "i16" || t == "f32")) {
+      source_bits = t == "i8" ? 8u : t == "i10" ? 10u : t == "i12" ? 12u : t == "i14" ? 14u : t == "i16" ? 16u : 32u;
+      continue;
+    }
+    if (expr && (t == "scaleb" || t == "scalef" || t == "yscaleb" || t == "yscalef")) {
+      need(1);
+      if (!input_count)
+        error("scaling requires a first input format");
+      uint32_t target = scaling.converts(formats[0].bits) ? source_bits : formats[0].bits;
+      stack.back() = scale(convert(stack.back(), Type::Number), source_bits, target, expr->chroma && t[0] != 'y',
+                           t.back() == 'f', scaling.shift());
+      continue;
+    }
+    std::string_view constant_name(t);
+    if (t.size() > 2 && t[t.size() - 2] == '_')
+      constant_name.remove_suffix(2);
     auto indexed = [&](std::string_view prefix) {
       return t.compare(0, prefix.size(), prefix) == 0 && (t.size() == prefix.size() || digit(t[prefix.size()]) ||
                                                           t[prefix.size()] == '+' || t[prefix.size()] == '-');
@@ -151,6 +198,22 @@ IR parse(const std::string& source, uint32_t input_count, bool extended_inputs) 
         n.args[j] = convert(stack[stack.size() - count + j], wanted);
       }
       stack.resize(stack.size() - count);
+    } else if (expr && t == "time") {
+      n.op = Op::Time;
+    } else if (expr && t == "sbitdepth") {
+      n.value = float(source_bits);
+    } else if (expr && expr_constant_name(constant_name)) {
+      uint32_t input = 0;
+      if (constant_name.size() != t.size()) {
+        char suffix = t.back();
+        if (suffix < 'a' || suffix > 'z')
+          error("invalid range constant input suffix");
+        input = uint32_t(suffix >= 'x' ? suffix - 'x' : suffix - 'a' + 3);
+      }
+      if (input >= input_count)
+        error("range constant input outside configured count");
+      uint32_t bits = scaling.converts(formats[input].bits) ? source_bits : formats[input].bits;
+      n.value = expr_constant(constant_name, bits, expr->chroma != 0, scaling.shift());
     } else if (t == "sxr" || t == "syr") {
       // Expand into ordinary IR so all backends retain the same division and dependencies.
       n.op = t == "sxr" ? Op::Sx : Op::Sy;
@@ -217,7 +280,8 @@ IR parse(const std::string& source, uint32_t input_count, bool extended_inputs) 
     } else if (t.back() == '@' || t.back() == '^') {
       const char mode = t.back();
       t.pop_back();
-      if (!identifier(t) || reserved(t) || (extended_inputs && t.size() == 1 && t[0] >= 'a' && t[0] <= 'w'))
+      if (!identifier(t) || reserved(t) || (expr && expr_reserved(t)) ||
+          (extended_inputs && t.size() == 1 && t[0] >= 'a' && t[0] <= 'w'))
         error("invalid or reserved variable name");
       if (vars.size() >= max_nodes && vars.find(t) == vars.end())
         throw Error(IRIS_LIMIT_EXCEEDED, "variable limit exceeded", start, len);
@@ -237,7 +301,15 @@ IR parse(const std::string& source, uint32_t input_count, bool extended_inputs) 
     }
     if (stack.size() >= max_nodes)
       throw Error(IRIS_LIMIT_EXCEEDED, "stack limit exceeded", start, len);
-    stack.push_back(emit(n));
+    auto value = emit(n);
+    if (expr && n.op == Op::Input) {
+      uint32_t bits = formats[n.input].bits;
+      if (scaling.converts(bits))
+        value = scale(value, bits, source_bits, expr->chroma != 0, scaling.full(), false);
+      if (scaling.shift() && expr->chroma && bits == 32)
+        value = binary(Op::Add, value, 0.5f);
+    }
+    stack.push_back(value);
   }
   if (stack.size() != 1) {
     start = source.size();
@@ -245,6 +317,19 @@ IR parse(const std::string& source, uint32_t input_count, bool extended_inputs) 
     error(stack.empty() ? "expression has no result" : "expression leaves multiple values");
   }
   ir.result = convert(stack.back(), Type::Number);
+  if (expr && input_count) {
+    uint32_t target = formats[0].bits;
+    if (scaling.converts(target))
+      ir.result = scale(ir.result, source_bits, target, expr->chroma != 0, scaling.full(), false);
+    if (target == 32) {
+      if (scaling.shift() && expr->chroma)
+        ir.result = binary(Op::Sub, ir.result, 0.5f);
+      if (expr->clamp_float) {
+        ir.result = binary(Op::Max, ir.result, expr->chroma && !expr->clamp_float_uv ? -0.5f : 0.0f);
+        ir.result = binary(Op::Min, ir.result, expr->chroma && !expr->clamp_float_uv ? 0.5f : 1.0f);
+      }
+    }
+  }
   return ir;
 }
 } // namespace iris

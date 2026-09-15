@@ -179,6 +179,16 @@ struct Lowering {
         case Op::Frame:
           v = LLVMBuildUIToFP(b, field(i64, offsetof(ExecuteArgs, frameno)), f32, "");
           break;
+        case Op::Time: {
+          auto f64 = LLVMDoubleTypeInContext(m.context);
+          auto frame = LLVMBuildUIToFP(b, field(i64, offsetof(ExecuteArgs, frameno)), f64, "");
+          v = p.options.expr.frame_count > 1
+                  ? LLVMBuildFPTrunc(
+                        b, LLVMBuildFDiv(b, frame, LLVMConstReal(f64, double(p.options.expr.frame_count - 1)), ""), f32,
+                        "")
+                  : number(0);
+          break;
+        }
         case Op::ToBool:
           v = cmp(LLVMRealOGT, a, number(0));
           break;

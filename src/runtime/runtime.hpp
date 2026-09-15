@@ -8,6 +8,7 @@ struct CompileOptions {
   iris_format inputs[26]{}, output{};
   int optimize = 0;
   bool extended_inputs = false;
+  iris_expr_options_v1 expr{};
   CompileOptions() = default;
   CompileOptions(const iris_compile_options& o)
       : width(o.width), height(o.height), input_count(o.input_count), output(o.output), optimize(o.optimize) {

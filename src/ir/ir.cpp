@@ -5,7 +5,7 @@
 #include <iomanip>
 namespace iris {
 unsigned arity(Op op) {
-  if (op <= Op::Frame)
+  if (op <= Op::Time)
     return 0;
   if (op == Op::ToBool || op == Op::ToNumber || op == Op::Abs || op == Op::Sqrt || op == Op::Not ||
       (op >= Op::Neg && op <= Op::Atan))
@@ -184,12 +184,12 @@ void optimize(IR& ir) {
   ir.properties = std::move(props);
 }
 std::string dump(const IR& ir) {
-  static const char* names[] = {"const",   "input",     "property", "sx",   "sy",    "width", "height", "frameno",
-                                "to_bool", "to_number", "add",      "sub",  "mul",   "div",   "min",    "max",
-                                "abs",     "sqrt",      "neg",      "sgn",  "round", "floor", "ceil",   "trunc",
-                                "exp",     "log",       "sin",      "cos",  "tan",   "asin",  "acos",   "atan",
-                                "fmod",    "pow",       "atan2",    "clip", "lt",    "le",    "eq",     "ne",
-                                "ge",      "gt",        "and",      "or",   "xor",   "not",   "select"};
+  static const char* names[] = {"const", "input",   "property",  "sx",    "sy",   "width", "height", "frameno",
+                                "time",  "to_bool", "to_number", "add",   "sub",  "mul",   "div",    "min",
+                                "max",   "abs",     "sqrt",      "neg",   "sgn",  "round", "floor",  "ceil",
+                                "trunc", "exp",     "log",       "sin",   "cos",  "tan",   "asin",   "acos",
+                                "atan",  "fmod",    "pow",       "atan2", "clip", "lt",    "le",     "eq",
+                                "ne",    "ge",      "gt",        "and",   "or",   "xor",   "not",    "select"};
   std::ostringstream s;
   s << std::setprecision(9);
   for (size_t i = 0; i < ir.nodes.size(); ++i) {

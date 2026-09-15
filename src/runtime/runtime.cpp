@@ -102,7 +102,7 @@ void describe(Program& p) {
       if (n.dx || n.dy)
         info.has_relative_access = 1;
     }
-    if (n.op >= Op::Sx && n.op <= Op::Frame)
+    if (n.op >= Op::Sx && n.op <= Op::Time)
       info.metadata_mask |= 1u << (static_cast<unsigned>(n.op) - static_cast<unsigned>(Op::Sx));
   }
   const auto& r = p.ir.nodes[p.ir.result];
@@ -115,6 +115,8 @@ void describe(Program& p) {
   p.text = dump(p.ir);
 }
 void validate_execution(const Program& p, const ExecuteArgs& a) {
+  if ((p.info.metadata_mask & IRIS_DEP_TIME) && a.frameno >= p.options.expr.frame_count)
+    fail("frame index outside Expr frame count");
   auto plane = [&](const void* data, ptrdiff_t stride, iris_format f) {
     if (!data)
       fail("required plane data is null");

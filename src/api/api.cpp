@@ -51,7 +51,8 @@ static iris_status compile_normalized(const char* s, const iris::CompileOptions*
       throw iris::Error(IRIS_LIMIT_EXCEEDED, "expression length limit exceeded");
     auto p = std::make_shared<iris::Program>();
     p->options = *o;
-    p->ir = iris::parse(std::string(s, len), o->input_count, o->extended_inputs);
+    p->ir = iris::parse(std::string(s, len), o->input_count, o->extended_inputs, o->inputs,
+                        o->expr.struct_size ? &o->expr : nullptr);
     iris::verify(p->ir);
     if (o->optimize) {
       iris::optimize(p->ir);
@@ -75,7 +76,8 @@ iris_status iris_compile_ex(const char* s, const iris_compile_options* o, iris_b
 uint32_t iris_get_api_version(void) {
   return IRIS_API_VERSION;
 }
-iris_status iris_compile_v1(const char* s, const iris_compile_options_v1* o, iris_plan** out, iris_diagnostic* d) {
+static iris_status compile_v1(const char* s, const iris_compile_options_v1* o, const iris_expr_options_v1* expr,
+                              iris_plan** out, iris_diagnostic* d) {
   if (out)
     *out = nullptr;
   iris::CompileOptions options;
@@ -89,8 +91,30 @@ iris_status iris_compile_v1(const char* s, const iris_compile_options_v1* o, iri
     options.output = o->output;
     options.optimize = o->optimize;
     options.extended_inputs = true;
+    if (expr) {
+      if (expr->struct_size != sizeof(*expr) || !expr->frame_count || (expr->chroma != 0 && expr->chroma != 1) ||
+          expr->scale_inputs < IRIS_SCALE_NONE || expr->scale_inputs > IRIS_SCALE_FLOAT_UV ||
+          (expr->clamp_float != 0 && expr->clamp_float != 1) ||
+          (expr->clamp_float_uv != 0 && expr->clamp_float_uv != 1))
+        iris::fail("invalid Expr frontend context");
+      options.expr = *expr;
+      if (!options.input_count && (expr->scale_inputs != IRIS_SCALE_NONE || expr->clamp_float))
+        iris::fail("Expr scaling and clamping require a first input format");
+    }
   });
   return status == IRIS_OK ? compile_normalized(s, &options, o->backend, o->enable_lut, out, d) : status;
+}
+iris_status iris_compile_v1(const char* s, const iris_compile_options_v1* o, iris_plan** out, iris_diagnostic* d) {
+  return compile_v1(s, o, nullptr, out, d);
+}
+iris_status iris_compile_expr_v1(const char* s, const iris_compile_options_v1* o, const iris_expr_options_v1* expr,
+                                 iris_plan** out, iris_diagnostic* d) {
+  if (!expr) {
+    if (out)
+      *out = nullptr;
+    return guard(d, [] { iris::fail("null Expr frontend context"); });
+  }
+  return compile_v1(s, o, expr, out, d);
 }
 void iris_plan_destroy(iris_plan* p) {
   delete p;

@@ -89,6 +89,9 @@ void run(const Program& p, std::vector<float>& v, const ExecuteArgs& a) noexcept
           case Op::Frame:
             value = static_cast<float>(a.frameno);
             break;
+          case Op::Time:
+            value = o.expr.frame_count > 1 ? float(double(a.frameno) / double(o.expr.frame_count - 1)) : 0.0f;
+            break;
           default: {
             float args[3]{};
             for (unsigned j = 0; j < arity(n.op); ++j)

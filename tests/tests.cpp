@@ -976,7 +976,10 @@ void extended_execution() {
     format = {IRIS_U8, 8};
   o.inputs[25] = {IRIS_U16, 10};
   iris_plan* p = nullptr;
-  CHECK(iris_compile_v1("w a + frameno +", &o, &p, nullptr) == IRIS_OK);
+  iris_expr_options_v1 expr{};
+  expr.struct_size = sizeof(expr);
+  expr.frame_count = 8;
+  CHECK(iris_compile_expr_v1("time SavedTime^ w a + frameno +", &o, &expr, &p, nullptr) == IRIS_OK);
   std::atomic<int> failures{0};
   std::vector<std::thread> workers;
   for (unsigned thread = 0; thread < 8; ++thread)

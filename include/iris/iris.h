@@ -34,7 +34,14 @@ typedef struct iris_compile_options {
 /* COMPUTE is backend independent. NONE means a fill/copy/LUT strategy. */
 typedef enum iris_strategy { IRIS_COMPUTE, IRIS_FILL, IRIS_COPY, IRIS_LUT_U8 } iris_strategy;
 typedef enum iris_backend { IRIS_BACKEND_NONE, IRIS_BACKEND_SCALAR, IRIS_BACKEND_LLVM } iris_backend;
-enum { IRIS_DEP_SX = 1, IRIS_DEP_SY = 2, IRIS_DEP_WIDTH = 4, IRIS_DEP_HEIGHT = 8, IRIS_DEP_FRAMENO = 16 };
+enum {
+  IRIS_DEP_SX = 1,
+  IRIS_DEP_SY = 2,
+  IRIS_DEP_WIDTH = 4,
+  IRIS_DEP_HEIGHT = 8,
+  IRIS_DEP_FRAMENO = 16,
+  IRIS_DEP_TIME = 32
+};
 typedef struct iris_plan_info {
   uint32_t width, height, input_mask, metadata_mask;
   size_t instruction_count, property_count;
@@ -84,6 +91,27 @@ typedef struct iris_execute_args_v1 {
 uint32_t iris_get_api_version(void);
 iris_status iris_compile_v1(const char*, const iris_compile_options_v1*, iris_plan**, iris_diagnostic*);
 iris_status iris_execute_v1(const iris_plan*, iris_context*, const iris_execute_args_v1*, iris_diagnostic*);
+typedef enum iris_scale_inputs {
+  IRIS_SCALE_NONE,
+  IRIS_SCALE_ALL,
+  IRIS_SCALE_ALL_FULL,
+  IRIS_SCALE_INT,
+  IRIS_SCALE_INT_FULL,
+  IRIS_SCALE_FLOAT,
+  IRIS_SCALE_FLOAT_FULL,
+  IRIS_SCALE_FLOAT_UV
+} iris_scale_inputs;
+/* Additional Expr frontend context; existing v1 layouts remain unchanged.
+   frame_count must be positive. chroma and clamp flags are exactly 0 or 1. */
+typedef struct iris_expr_options_v1 {
+  size_t struct_size;
+  uint64_t frame_count;
+  int chroma;
+  iris_scale_inputs scale_inputs;
+  int clamp_float, clamp_float_uv;
+} iris_expr_options_v1;
+iris_status iris_compile_expr_v1(const char*, const iris_compile_options_v1*, const iris_expr_options_v1*, iris_plan**,
+                                 iris_diagnostic*);
 /* Expression is NUL terminated, <=65536 bytes. Diagnostics are optional.
    All failures clear output handles. Other pointers are required unless documented. */
 iris_status iris_compile(const char*, const iris_compile_options*, iris_plan**, iris_diagnostic*);
