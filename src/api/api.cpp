@@ -1,0 +1,135 @@
+#include "runtime/runtime.hpp"
+#include <cstdio>
+#include <cstring>
+#include <new>
+namespace {
+template <class F>
+iris_status guard(iris_diagnostic* d, F f) noexcept {
+  if (d)
+    *d = {};
+  try {
+    f();
+    return IRIS_OK;
+  } catch (const iris::Error& e) {
+    if (d) {
+      d->offset = e.offset;
+      d->length = e.length;
+      std::snprintf(d->message, sizeof d->message, "%s", e.what());
+    }
+    return e.status;
+  } catch (const std::bad_alloc&) {
+    if (d)
+      std::snprintf(d->message, sizeof d->message, "allocation failed");
+    return IRIS_OUT_OF_MEMORY;
+  } catch (...) {
+    if (d)
+      std::snprintf(d->message, sizeof d->message, "unexpected internal error");
+    return IRIS_INTERNAL_ERROR;
+  }
+}
+} // namespace
+extern "C" {
+iris_status iris_compile(const char* s, const iris_compile_options* o, iris_plan** out, iris_diagnostic* d) {
+  return iris_compile_ex(s, o, IRIS_BACKEND_SCALAR, 0, out, d);
+}
+iris_status iris_compile_ex(const char* s, const iris_compile_options* o, iris_backend backend, int enable_lut,
+                            iris_plan** out, iris_diagnostic* d) {
+  if (out)
+    *out = nullptr;
+  return guard(d, [&] {
+    if (!s || !o || !out)
+      iris::fail("null compile argument");
+    if ((backend != IRIS_BACKEND_SCALAR && backend != IRIS_BACKEND_LLVM) || (enable_lut != 0 && enable_lut != 1))
+      iris::fail("invalid backend or LUT option");
+    if (backend == IRIS_BACKEND_LLVM && !iris::llvm_available())
+      throw iris::Error(IRIS_BACKEND_UNAVAILABLE, "LLVM was disabled at build time");
+    iris::validate_options(*o);
+    size_t len = 0;
+    while (len <= iris::max_source && s[len])
+      ++len;
+    if (len > iris::max_source)
+      throw iris::Error(IRIS_LIMIT_EXCEEDED, "expression length limit exceeded");
+    auto p = std::make_shared<iris::Program>();
+    p->options = *o;
+    p->ir = iris::parse(std::string(s, len), o->input_count);
+    iris::verify(p->ir);
+    if (o->optimize) {
+      iris::optimize(p->ir);
+      iris::verify(p->ir);
+    }
+    iris::describe(*p);
+    if (enable_lut)
+      iris::prepare_lut(*p);
+    if (backend == IRIS_BACKEND_LLVM && p->info.strategy == IRIS_COMPUTE)
+      p->jit = iris::compile_llvm(*p);
+    *out = new iris_plan{std::move(p)};
+  });
+}
+void iris_plan_destroy(iris_plan* p) {
+  delete p;
+}
+iris_status iris_plan_get_backend(const iris_plan* p, iris_backend* backend, iris_diagnostic* d) {
+  return guard(d, [&] {
+    if (!p || !backend)
+      iris::fail("null backend query");
+    *backend = p->program->info.strategy != IRIS_COMPUTE ? IRIS_BACKEND_NONE
+               : p->program->jit                         ? IRIS_BACKEND_LLVM
+                                                         : IRIS_BACKEND_SCALAR;
+  });
+}
+iris_status iris_plan_get_info(const iris_plan* p, iris_plan_info* i, iris_diagnostic* d) {
+  return guard(d, [&] {
+    if (!p || !i)
+      iris::fail("null info argument");
+    *i = p->program->info;
+  });
+}
+iris_status iris_plan_get_property(const iris_plan* p, size_t slot, iris_property_dependency* prop,
+                                   iris_diagnostic* d) {
+  return guard(d, [&] {
+    if (!p || !prop || slot >= p->program->ir.properties.size())
+      iris::fail("invalid property query");
+    const auto& x = p->program->ir.properties[slot];
+    prop->input = x.input;
+    prop->name = x.name.c_str();
+  });
+}
+iris_status iris_plan_dump(const iris_plan* p, char* buffer, size_t capacity, size_t* required, iris_diagnostic* d) {
+  return guard(d, [&] {
+    if (!p || !required)
+      iris::fail("null dump argument");
+    const auto& s = p->program->text;
+    *required = s.size() + 1;
+    if (!buffer && capacity == 0)
+      return;
+    if (!buffer || capacity < *required)
+      iris::fail("dump buffer too small");
+    std::memcpy(buffer, s.c_str(), *required);
+  });
+}
+iris_status iris_context_create(const iris_plan* p, iris_context** out, iris_diagnostic* d) {
+  if (out)
+    *out = nullptr;
+  return guard(d, [&] {
+    if (!p || !out)
+      iris::fail("null context argument");
+    auto c = std::make_unique<iris_context>();
+    c->program = p->program;
+    c->values.resize(p->program->ir.nodes.size());
+    *out = c.release();
+  });
+}
+void iris_context_destroy(iris_context* c) {
+  delete c;
+}
+iris_status iris_execute(const iris_plan* p, iris_context* c, const iris_execute_args* a, iris_diagnostic* d) {
+  return guard(d, [&] {
+    if (!p || !c || !a)
+      iris::fail("null execute argument");
+    if (p->program != c->program)
+      iris::fail("context belongs to another plan");
+    iris::validate_execution(*p->program, *a);
+    iris::execute_program(*p->program, c->values, *a);
+  });
+}
+}

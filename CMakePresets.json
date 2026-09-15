@@ -1,0 +1,50 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": { "major": 3, "minor": 21, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "scalar",
+      "displayName": "Scalar development build",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "BUILD_TESTING": "ON",
+        "IRIS_LLVM": "OFF",
+        "IRIS_AVS": "OFF",
+        "IRIS_SANITIZE": "OFF"
+      }
+    },
+    {
+      "name": "llvm",
+      "displayName": "LLVM development build",
+      "inherits": "scalar",
+      "cacheVariables": { "IRIS_LLVM": "ON" }
+    },
+    {
+      "name": "sanitize",
+      "displayName": "Scalar ASan and UBSan build",
+      "inherits": "scalar",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug", "IRIS_SANITIZE": "ON" }
+    },
+    {
+      "name": "llvm-sanitize",
+      "displayName": "LLVM ASan and UBSan build",
+      "inherits": "llvm",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug", "IRIS_SANITIZE": "ON" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "scalar", "configurePreset": "scalar" },
+    { "name": "llvm", "configurePreset": "llvm" },
+    { "name": "sanitize", "configurePreset": "sanitize" },
+    { "name": "llvm-sanitize", "configurePreset": "llvm-sanitize" }
+  ],
+  "testPresets": [
+    { "name": "scalar", "configurePreset": "scalar", "output": { "outputOnFailure": true } },
+    { "name": "llvm", "configurePreset": "llvm", "output": { "outputOnFailure": true } },
+    { "name": "sanitize", "configurePreset": "sanitize", "output": { "outputOnFailure": true } },
+    { "name": "llvm-sanitize", "configurePreset": "llvm-sanitize", "output": { "outputOnFailure": true } }
+  ]
+}
