@@ -112,6 +112,9 @@ void numerical() {
                         {"2 3 <", 1},
                         {"2 2 <=", 1},
                         {"2 2 =", 1},
+                        {"2 2 ==", 1},
+                        {"-1 2 &", 0},
+                        {"-1 2 |", 1},
                         {"2 3 !=", 1},
                         {"3 2 >=", 1},
                         {"3 2 >", 1},
@@ -122,6 +125,13 @@ void numerical() {
                         {"1 10 20 ?", 10},
                         {"0 10 20 ?", 20},
                         {"2 dup *", 4},
+                        {"2 dup0 *", 4},
+                        {"2 3 dup1 * +", 8},
+                        {"2 3 5 dup2 + + +", 12},
+                        {"2 3 swap1 -", 1},
+                        {"2 3 5 swap2 - -", 4},
+                        {"2 3 dup+1 * +", 8},
+                        {"2 dup_name@ dup_name +", 4},
                         {"2 3 swap -", 1},
                         {"2 A@ A +", 4},
                         {"2 long_name^ long_name 3 +", 5},
@@ -200,6 +210,14 @@ void sqrt_boundaries() {
   }
 }
 void errors() {
+  for (const char* expression : {"dup0", "1 swap1", "1 dup1", "1 2 swap0", "1 dup-1", "1 dup+", "1 dup4294967296",
+                                 "1 dup1tail", "1 2 swap-1", "1 2 swap4294967295"}) {
+    auto config = options();
+    iris_plan* invalid = nullptr;
+    iris_diagnostic error{};
+    CHECK(iris_compile(expression, &config, &invalid, &error) == IRIS_PARSE_ERROR);
+    CHECK(!invalid && error.length > 0 && error.message[0]);
+  }
   const char* bad[] = {"",
                        "+",
                        "1 2",

@@ -52,11 +52,12 @@ bool decimal(std::string_view s) {
   return i == s.size();
 }
 const std::unordered_map<std::string, Op> ops = {
-    {"+", Op::Add},   {"-", Op::Sub},       {"*", Op::Mul},         {"/", Op::Div},        {"min", Op::Min},
-    {"max", Op::Max}, {"abs", Op::Abs},     {"sqrt", Op::Sqrt},     {"<", Op::Lt},         {"<=", Op::Le},
-    {"=", Op::Eq},    {"!=", Op::Ne},       {">=", Op::Ge},         {">", Op::Gt},         {"and", Op::And},
-    {"or", Op::Or},   {"xor", Op::Xor},     {"not", Op::Not},       {"?", Op::Select},     {"sx", Op::Sx},
-    {"sy", Op::Sy},   {"width", Op::Width}, {"height", Op::Height}, {"frameno", Op::Frame}};
+    {"+", Op::Add},   {"-", Op::Sub},       {"*", Op::Mul},         {"/", Op::Div},         {"min", Op::Min},
+    {"max", Op::Max}, {"abs", Op::Abs},     {"sqrt", Op::Sqrt},     {"<", Op::Lt},          {"<=", Op::Le},
+    {"=", Op::Eq},    {"!=", Op::Ne},       {">=", Op::Ge},         {">", Op::Gt},          {"and", Op::And},
+    {"or", Op::Or},   {"xor", Op::Xor},     {"not", Op::Not},       {"?", Op::Select},      {"sx", Op::Sx},
+    {"sy", Op::Sy},   {"width", Op::Width}, {"height", Op::Height}, {"frameno", Op::Frame}, {"==", Op::Eq},
+    {"&", Op::And},   {"|", Op::Or}};
 bool reserved(const std::string& s) {
   return ops.count(s) || s == "dup" || s == "swap" || s == "x" || s == "y" || s == "z";
 }
@@ -101,16 +102,36 @@ IR parse(const std::string& source, uint32_t input_count) {
     len = pos - start;
     std::string t = source.substr(start, len);
     Node n;
-    if (t == "dup") {
-      need(1);
+    auto indexed = [&](std::string_view prefix) {
+      return t.compare(0, prefix.size(), prefix) == 0 && (t.size() == prefix.size() || digit(t[prefix.size()]) ||
+                                                          t[prefix.size()] == '+' || t[prefix.size()] == '-');
+    };
+    auto depth = [&](size_t prefix, uint32_t default_value, uint32_t minimum) {
+      uint32_t value = default_value;
+      if (t.size() != prefix) {
+        const char* begin = t.data() + prefix;
+        if (*begin == '+')
+          ++begin;
+        auto result = std::from_chars(begin, t.data() + t.size(), value);
+        if (result.ec != std::errc{} || result.ptr != t.data() + t.size())
+          error("invalid stack index");
+      }
+      if (value < minimum)
+        error("stack index below minimum");
+      if (value >= stack.size())
+        error("stack underflow");
+      return value;
+    };
+    if (indexed("dup")) {
+      uint32_t index = depth(3, 0, 0);
       if (stack.size() >= max_nodes)
         throw Error(IRIS_LIMIT_EXCEEDED, "stack limit exceeded", start, len);
-      stack.push_back(stack.back());
+      stack.push_back(stack[stack.size() - 1 - index]);
       continue;
     }
-    if (t == "swap") {
-      need(2);
-      std::swap(stack[stack.size() - 1], stack[stack.size() - 2]);
+    if (indexed("swap")) {
+      uint32_t index = depth(4, 1, 1);
+      std::swap(stack.back(), stack[stack.size() - 1 - index]);
       continue;
     }
     auto op = ops.find(t);
