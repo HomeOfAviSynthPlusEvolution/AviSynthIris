@@ -64,9 +64,9 @@ iris_backend test_backend = IRIS_BACKEND_SCALAR;
 struct Compiled {
   iris_plan* p = nullptr;
   iris_context* c = nullptr;
-  Compiled(const std::string& s, iris_compile_options o = options()) {
+  Compiled(const std::string& s, iris_compile_options o = options(), int enable_lut = 0) {
     iris_diagnostic d{};
-    auto status = iris_compile_ex(s.c_str(), &o, test_backend, 0, &p, &d);
+    auto status = iris_compile_ex(s.c_str(), &o, test_backend, enable_lut, &p, &d);
     if (status != IRIS_OK)
       throw std::runtime_error(s + ": " + d.message);
     CHECK(iris_context_create(p, &c, &d) == IRIS_OK);
@@ -131,7 +131,9 @@ void numerical() {
                         {"1 0 /", INFINITY},
                         {"-1 0 /", -INFINITY},
                         {"0 0 /", NAN},
-                        {"-1 sqrt", NAN},
+                        {"-1 sqrt", 0.0f},
+                        {"-1 0 / sqrt", 0.0f},
+                        {"0 0 / sqrt", NAN},
                         {"0 0 / 1 min", NAN},
                         {"1 0 0 / max", NAN},
                         {"-0 0 min", -0.0f},
@@ -163,6 +165,38 @@ void numerical() {
     CHECK(iris_execute(p.p, p.c, &a, nullptr) == IRIS_OK);
     const uint8_t want[] = {0, 0, 0, 0, 1, 255, 255};
     CHECK(std::memcmp(out, want, 7) == 0);
+  }
+}
+void sqrt_boundaries() {
+  const float input[] = {-4.0f,    -INFINITY, -std::numeric_limits<float>::denorm_min(), -0.0f, 0.0f, 1.0f, 4.0f,
+                         INFINITY, NAN};
+  const float expected[] = {0.0f, 0.0f, 0.0f, -0.0f, 0.0f, 1.0f, 2.0f, INFINITY, NAN};
+  for (int optimize = 0; optimize < 2; ++optimize) {
+    auto o = options(17, 3, optimize);
+    Compiled p("x sqrt", o);
+    float pixels[51], output[51];
+    for (size_t i = 0; i < 51; ++i)
+      pixels[i] = input[i % 9];
+    iris_execute_args args{};
+    args.inputs[0] = {pixels, 17 * sizeof(float)};
+    args.output = {output, 17 * sizeof(float)};
+    CHECK(iris_execute(p.p, p.c, &args, nullptr) == IRIS_OK);
+    for (size_t i = 0; i < 51; ++i)
+      CHECK(same(output[i], expected[i % 9]));
+    o = options(256, 1, optimize);
+    o.input_count = 1;
+    o.inputs[0] = {IRIS_U8, 8};
+    Compiled lut("x 128 - sqrt", o, 1);
+    CHECK(lut.info().strategy == IRIS_LUT_U8);
+    uint8_t indices[256];
+    float table_output[256];
+    for (int i = 0; i < 256; ++i)
+      indices[i] = static_cast<uint8_t>(i);
+    args.inputs[0] = {indices, sizeof indices};
+    args.output = {table_output, sizeof table_output};
+    CHECK(iris_execute(lut.p, lut.c, &args, nullptr) == IRIS_OK);
+    for (int i = 0; i < 256; ++i)
+      CHECK(same(table_output[i], i <= 128 ? 0.0f : std::sqrt(float(i - 128))));
   }
 }
 void errors() {
@@ -772,6 +806,7 @@ int main(int argc, char** argv) {
   try {
     backend_contract();
     numerical();
+    sqrt_boundaries();
     errors();
     layout();
     strategies_and_allocation();

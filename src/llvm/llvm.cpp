@@ -193,7 +193,7 @@ struct Lowering {
           v = intrinsic("llvm.fabs.f32", a);
           break;
         case Op::Sqrt:
-          v = intrinsic("llvm.sqrt.f32", a);
+          v = intrinsic("llvm.sqrt.f32", select(cmp(LLVMRealOLT, a, number(0)), number(0), a));
           break;
         case Op::Lt:
           v = cmp(LLVMRealOLT, a, c);

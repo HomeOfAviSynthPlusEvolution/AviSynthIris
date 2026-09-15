@@ -39,7 +39,7 @@ float evaluate(Op op, float a, float b, float c) noexcept {
     case Op::Abs:
       return std::fabs(a);
     case Op::Sqrt:
-      return std::sqrt(a);
+      return std::sqrt(a < 0.0f ? 0.0f : a);
     case Op::Lt:
       return a < b;
     case Op::Le:
