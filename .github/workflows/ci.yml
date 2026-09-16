@@ -1,0 +1,203 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64 / clang-cl / LLVM 22 + SLEEF
+            os: windows-2022
+            generator: Visual Studio 17 2022
+            arch: x64
+            llvm_arch: x86_64
+            llvm_sha256: d96c2cc1736f4eb7fa43cb9bbdf56d93551a9ae0a9aadb9c99c3c3b2b712a234
+            sleef: 'ON'
+            toolset: ClangCL
+          - name: Windows x64 / MSVC / LLVM 22 + SLEEF
+            os: windows-2022
+            generator: Visual Studio 17 2022
+            arch: x64
+            llvm_arch: x86_64
+            llvm_sha256: d96c2cc1736f4eb7fa43cb9bbdf56d93551a9ae0a9aadb9c99c3c3b2b712a234
+            sleef: 'ON'
+            toolset: v143
+          - name: Windows ARM64 / clang-cl / LLVM 22
+            os: windows-11-vs2026-arm
+            generator: Visual Studio 18 2026
+            arch: ARM64
+            llvm_arch: aarch64
+            llvm_sha256: de718c58ebbc5f61d58c17b90457fcf42983bc2c4a4aba3e010d108713bfd7f1
+            sleef: 'OFF'
+            toolset: ClangCL
+          - name: Windows ARM64 / MSVC / LLVM 22
+            os: windows-11-vs2026-arm
+            generator: Visual Studio 18 2026
+            arch: ARM64
+            llvm_arch: aarch64
+            llvm_sha256: de718c58ebbc5f61d58c17b90457fcf42983bc2c4a4aba3e010d108713bfd7f1
+            sleef: 'OFF'
+            toolset: v145
+          - name: Linux x64 / GCC / LLVM 20 + SLEEF
+            os: ubuntu-24.04
+            cc: gcc
+            cxx: g++
+          - name: Linux ARM64 / Clang / LLVM 20 + SLEEF
+            os: ubuntu-24.04-arm
+            cc: clang-20
+            cxx: clang++-20
+          - name: macOS ARM64 / Apple Clang / LLVM 21 + SLEEF
+            os: macos-15
+            cc: clang
+            cxx: clang++
+          - name: macOS x64 / Apple Clang / LLVM 21 + SLEEF
+            os: macos-15-intel
+            cc: clang
+            cxx: clang++
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install LLVM SDK (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          LLVM_ARCH: ${{ matrix.llvm_arch }}
+          LLVM_SHA256: ${{ matrix.llvm_sha256 }}
+        run: |
+          $name = "clang+llvm-22.1.8-$env:LLVM_ARCH-pc-windows-msvc"
+          $archive = Join-Path $env:RUNNER_TEMP 'llvm.tar.xz'
+          Invoke-WebRequest "https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.8/$name.tar.xz" -OutFile $archive
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne $env:LLVM_SHA256) {
+            throw 'LLVM SDK checksum mismatch'
+          }
+          tar -xf $archive -C $env:RUNNER_TEMP
+          if ($LASTEXITCODE -ne 0) { throw 'LLVM SDK extraction failed' }
+          $sdk = Join-Path $env:RUNNER_TEMP $name
+          "LLVM_DIR=$sdk/lib/cmake/llvm" >> $env:GITHUB_ENV
+          "$sdk/bin" >> $env:GITHUB_PATH
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build clang-20 llvm-20-dev
+          echo 'LLVM_DIR=/usr/lib/llvm-20/lib/cmake/llvm' >> "$GITHUB_ENV"
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install ninja llvm@21
+          echo "LLVM_DIR=$(brew --prefix llvm@21)/lib/cmake/llvm" >> "$GITHUB_ENV"
+
+      - name: Configure (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: >-
+          cmake -S . -B build/ci
+          -G "${{ matrix.generator }}"
+          -A "${{ matrix.arch }}"
+          -T "${{ matrix.toolset }}"
+          -DBUILD_TESTING=ON
+          -DIRIS_BENCHMARKS=OFF
+          -DIRIS_LLVM=ON "-DLLVM_DIR=$env:LLVM_DIR"
+          -DIRIS_SLEEF=${{ matrix.sleef }} -DIRIS_FETCH_SLEEF=${{ matrix.sleef }}
+
+      - name: Configure (Linux and macOS)
+        if: runner.os != 'Windows'
+        env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+        run: >-
+          cmake -S . -B build/ci -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DBUILD_TESTING=ON
+          -DIRIS_BENCHMARKS=OFF
+          -DIRIS_LLVM=ON "-DLLVM_DIR=$LLVM_DIR"
+          -DIRIS_SLEEF=ON -DIRIS_FETCH_SLEEF=ON
+
+      - name: Build
+        run: cmake --build build/ci --config Release --parallel 3
+
+      - name: Test
+        run: ctest --test-dir build/ci -C Release --output-on-failure --no-tests=error --parallel 3
+
+      - name: Reject SLEEF on Windows ARM64
+        if: runner.os == 'Windows' && matrix.arch == 'ARM64'
+        shell: pwsh
+        run: |
+          $output = & cmake -S . -B build/reject-sleef `
+            -G "${{ matrix.generator }}" -A "${{ matrix.arch }}" -T "${{ matrix.toolset }}" `
+            -DIRIS_LLVM=OFF -DIRIS_SLEEF=ON -DIRIS_FETCH_SLEEF=ON 2>&1
+          $configureExit = $LASTEXITCODE
+          $output | Write-Output
+          if ($configureExit -eq 0 -or "$output" -notmatch 'SLEEF is not supported on Windows ARM64') {
+            throw 'Expected the Windows ARM64 SLEEF guard to reject configuration'
+          }
+          if (Test-Path build/reject-sleef/_deps) { throw 'SLEEF was downloaded before rejection' }
+          exit 0
+
+  scalar:
+    name: Linux x64 / GCC / optional dependencies disabled
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Configure
+        env:
+          CC: gcc
+          CXX: g++
+        run: >-
+          cmake -S . -B build/ci -G Ninja
+          -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+          -DIRIS_LLVM=OFF -DIRIS_SLEEF=OFF
+      - name: Build
+        run: cmake --build build/ci --parallel 3
+      - name: Test
+        run: ctest --test-dir build/ci --output-on-failure --no-tests=error --parallel 3
+
+  sanitizers:
+    name: Linux x64 / Clang / LLVM 20 + SLEEF / ASan + UBSan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      CC: clang-20
+      CXX: clang++-20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build clang-20 libclang-rt-20-dev llvm-20-dev
+      # IRIS_SANITIZE instruments Iris and its consumers; the LLVM binary and JIT code are not instrumented.
+      - name: Configure
+        run: >-
+          cmake -S . -B build/ci -G Ninja
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_TESTING=ON -DIRIS_SANITIZE=ON
+          -DIRIS_LLVM=ON -DLLVM_DIR=/usr/lib/llvm-20/lib/cmake/llvm
+          -DIRIS_SLEEF=ON -DIRIS_FETCH_SLEEF=ON
+      - name: Build
+        run: cmake --build build/ci --parallel 3
+      - name: Test
+        run: ctest --test-dir build/ci --output-on-failure --no-tests=error --parallel 3

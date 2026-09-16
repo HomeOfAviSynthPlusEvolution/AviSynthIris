@@ -67,7 +67,7 @@ target_link_libraries(MyHost PRIVATE Iris::Iris)
 
 ### 可选 LLVM 与 SLEEF
 
-使用 `-DIRIS_LLVM=ON -DLLVM_DIR=/path/to/lib/cmake/llvm` 启用 LLVM。实现支持 LLVM 20–22 C API，要求提供导出的 `LLVM` CMake 目标。Ubuntu 24.04 可从官方仓库安装 `llvm-20-dev`，并设置 `LLVM_DIR=/usr/lib/llvm-20/lib/cmake/llvm`。
+使用 `-DIRIS_LLVM=ON -DLLVM_DIR=/path/to/lib/cmake/llvm` 启用 LLVM。实现支持 LLVM 20–22 C API，要求提供导出的 `LLVM` 或 `LLVM-C` CMake 目标。Ubuntu 24.04 可从官方仓库安装 `llvm-20-dev`，并设置 `LLVM_DIR=/usr/lib/llvm-20/lib/cmake/llvm`。
 
 使用 `-DIRIS_SLEEF=ON -DIRIS_FETCH_SLEEF=ON` 下载 SLEEF 3.9.0、校验 SHA256，并与 Iris 一起构建静态库。这需要 CMake 3.18 或更新版本。下载默认关闭，启用后使用构建目录，无需单独安装 SLEEF。
 

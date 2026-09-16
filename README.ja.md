@@ -67,7 +67,7 @@ target_link_libraries(MyHost PRIVATE Iris::Iris)
 
 ### 任意の LLVM と SLEEF
 
-`-DIRIS_LLVM=ON -DLLVM_DIR=/path/to/lib/cmake/llvm` で LLVM を有効にします。実装は LLVM 20–22 C API に対応し、エクスポートされた `LLVM` CMake ターゲットを必要とします。Ubuntu 24.04 では公式リポジトリーから `llvm-20-dev` をインストールし、`LLVM_DIR=/usr/lib/llvm-20/lib/cmake/llvm` を指定できます。
+`-DIRIS_LLVM=ON -DLLVM_DIR=/path/to/lib/cmake/llvm` で LLVM を有効にします。実装は LLVM 20–22 C API に対応し、エクスポートされた `LLVM` または `LLVM-C` CMake ターゲットを必要とします。Ubuntu 24.04 では公式リポジトリーから `llvm-20-dev` をインストールし、`LLVM_DIR=/usr/lib/llvm-20/lib/cmake/llvm` を指定できます。
 
 `-DIRIS_SLEEF=ON -DIRIS_FETCH_SLEEF=ON` を指定すると、SLEEF 3.9.0 をダウンロードし、SHA256 を検証して Iris とともに静的ライブラリーをビルドします。CMake 3.18 以降が必要です。ダウンロードは既定では無効です。有効にするとビルドディレクトリーを使用し、SLEEF の個別インストールは不要です。
 

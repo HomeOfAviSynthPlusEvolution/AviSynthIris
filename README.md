@@ -67,7 +67,7 @@ The public API is [include/iris/iris.h](include/iris/iris.h). Compile with `iris
 
 ### Optional LLVM and SLEEF
 
-Enable LLVM with `-DIRIS_LLVM=ON -DLLVM_DIR=/path/to/lib/cmake/llvm`. The implementation supports LLVM 20–22's C API and requires the exported `LLVM` CMake target. On Ubuntu 24.04, install `llvm-20-dev` from the official repositories and set `LLVM_DIR=/usr/lib/llvm-20/lib/cmake/llvm`.
+Enable LLVM with `-DIRIS_LLVM=ON -DLLVM_DIR=/path/to/lib/cmake/llvm`. The implementation supports LLVM 20–22's C API and requires the exported `LLVM` or `LLVM-C` CMake target. On Ubuntu 24.04, install `llvm-20-dev` from the official repositories and set `LLVM_DIR=/usr/lib/llvm-20/lib/cmake/llvm`.
 
 Enable SLEEF with `-DIRIS_SLEEF=ON -DIRIS_FETCH_SLEEF=ON` to download SLEEF 3.9.0, verify its SHA256, and build a static library with Iris. This requires CMake 3.18 or later. Downloading is opt-in and uses the build directory; no separate SLEEF installation is needed.
 
