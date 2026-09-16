@@ -67,14 +67,42 @@ float from_bits(uint32_t value) {
   return result;
 }
 bool available(const Operation& op, int mode) {
+  if (mode >= 3)
+    return std::string(op.name) != "fmod";
   return mode != 2 || op.fast || op.fast2;
 }
+float scalar(const Operation& op, bool fast, float x, float y) {
+  std::string name = op.name;
+#define UNARY(NAME)                                                                                                    \
+  if (name == #NAME)                                                                                                   \
+  return fast ? Sleef_##NAME##f1_u35purec(x) : Sleef_##NAME##f1_u10purec(x)
+  UNARY(sin);
+  UNARY(cos);
+  UNARY(tan);
+  UNARY(asin);
+  UNARY(acos);
+  UNARY(atan);
+  UNARY(log);
+#undef UNARY
+  if (name == "exp")
+    return Sleef_expf1_u10purec(x);
+  if (name == "pow")
+    return Sleef_powf1_u10purec(x, y);
+  if (name == "atan2")
+    return fast ? Sleef_atan2f1_u35purec(x, y) : Sleef_atan2f1_u10purec(x, y);
+  throw std::runtime_error("unknown scalar operation");
+}
 const char* label(const Operation& op, int mode) {
+  if (mode >= 3)
+    return mode == 3 ? "scalar_accurate" : "scalar_fast";
   return mode == 0 ? "host" : mode == 2 ? "sleef_u35" : std::string(op.name) == "fmod" ? "sleef" : "sleef_u10";
 }
 void run(const Operation& op, int mode, const std::vector<float>& x, const std::vector<float>& y,
          std::vector<float>& out) {
-  if (!mode) {
+  if (mode >= 3) {
+    for (size_t i = 0; i < x.size(); ++i)
+      out[i] = scalar(op, mode == 4, x[i], y[i]);
+  } else if (!mode) {
     for (size_t i = 0; i < x.size(); ++i)
       out[i] = op.host(x[i], y[i]);
   } else {
@@ -115,10 +143,11 @@ struct Stats {
   uint64_t rounded_different = 0, category_errors = 0, zero_sign_errors = 0;
   uint32_t worst_x = 0, worst_y = 0, worst_result = 0;
 };
-void accuracy() {
+void accuracy(bool enforce) {
+  uint64_t failures = 0;
   constexpr size_t count = 65536;
   std::vector<float> x(count), y(count);
-  std::array<std::vector<float>, 3> outputs;
+  std::array<std::vector<float>, 5> outputs;
   for (auto& output : outputs)
     output.resize(count);
   Big a, b, reference, difference;
@@ -163,10 +192,16 @@ void accuracy() {
             value = std::nextafter(value, direction);
           }
         }
-      for (int mode = 0; mode < 3; ++mode)
+      // Persist the discovered non-FMA atan2 u10 counterexample independently
+      // of the random generator and future sample-count changes.
+      if (std::string(op.name) == "atan2") {
+        x[cursor] = from_bits(0x06130708);
+        y[cursor] = from_bits(0x44be6425);
+      }
+      for (int mode = 0; mode < 5; ++mode)
         if (available(op, mode))
           run(op, mode, x, y, outputs[size_t(mode)]);
-      std::array<Stats, 3> stats{};
+      std::array<Stats, 5> stats{};
       for (size_t i = 0; i < count; ++i) {
         mpfr_set_flt(a.value, x[i], MPFR_RNDN);
         mpfr_set_flt(b.value, y[i], MPFR_RNDN);
@@ -175,7 +210,7 @@ void accuracy() {
         else
           op.oracle2(reference.value, a.value, b.value, MPFR_RNDN);
         float rounded = mpfr_get_flt(reference.value, MPFR_RNDN);
-        for (int mode = 0; mode < 3; ++mode) {
+        for (int mode = 0; mode < 5; ++mode) {
           if (!available(op, mode))
             continue;
           float actual = outputs[size_t(mode)][i];
@@ -211,15 +246,26 @@ void accuracy() {
           }
         }
       }
-      for (int mode = 0; mode < 3; ++mode)
+      for (int mode = 0; mode < 5; ++mode)
         if (available(op, mode)) {
           const auto& s = stats[size_t(mode)];
+          if (mode && std::string(op.name) != "fmod") {
+            double limit = (mode == 2 || (mode == 4 && (op.fast || op.fast2))) ? 3.5 : 1.0;
+            if (s.max_ulp > limit || s.category_errors || s.zero_sign_errors) {
+              std::cerr << "REJECT " << op.name << ',' << (broad ? "broad" : "ordinary") << ',' << label(op, mode)
+                        << ": max_ulp=" << s.max_ulp << " limit=" << limit << " category_errors=" << s.category_errors
+                        << " zero_sign_errors=" << s.zero_sign_errors << '\n';
+              ++failures;
+            }
+          }
           std::cout << op.name << ',' << (broad ? "broad" : "ordinary") << ',' << label(op, mode) << ',' << count << ','
                     << s.max_ulp << ',' << s.rounded_different << ',' << s.category_errors << ',' << s.zero_sign_errors
                     << ',' << s.worst_x << ',' << s.worst_y << ',' << s.worst_result << '\n'
                     << std::flush;
         }
     }
+  if (enforce && failures)
+    throw std::runtime_error("math precision acceptance failed: " + std::to_string(failures) + " rows");
 }
 volatile uint64_t sink = 0;
 void speed() {
@@ -260,19 +306,19 @@ void speed() {
 int main(int argc, char** argv) {
   try {
     if (argc != 2)
-      throw std::runtime_error("AVX2+FMA research probe: use accuracy, accuracy512 or speed");
+      throw std::runtime_error("AVX2+FMA research probe: use accuracy, accuracy512, check, check512 or speed");
     std::cout << std::setprecision(10);
     std::cerr << "SLEEF " << SLEEF_VERSION_MAJOR << '.' << SLEEF_VERSION_MINOR << '.' << SLEEF_VERSION_PATCHLEVEL
               << "; MPFR " << mpfr_get_version() << "; MXCSR=" << _mm_getcsr() << '\n';
     std::string mode = argv[1];
-    if (mode == "accuracy512")
+    if (mode == "accuracy512" || mode == "check512")
       reference_precision = 512;
-    if (mode == "accuracy" || mode == "accuracy512")
-      accuracy();
+    if (mode == "accuracy" || mode == "accuracy512" || mode == "check" || mode == "check512")
+      accuracy(mode == "check" || mode == "check512");
     else if (mode == "speed")
       speed();
     else
-      throw std::runtime_error("expected accuracy, accuracy512 or speed");
+      throw std::runtime_error("expected accuracy, accuracy512, check, check512 or speed");
   } catch (const std::exception& e) {
     std::cerr << e.what() << '\n';
     return 1;
