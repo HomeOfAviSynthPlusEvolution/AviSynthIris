@@ -5,6 +5,7 @@
 #include <llvm-c/Target.h>
 #include <llvm-c/TargetMachine.h>
 #include <llvm-c/Transforms/PassBuilder.h>
+#include <llvm/Config/llvm-config.h>
 #include <cstring>
 #include <limits>
 #include <map>
@@ -31,8 +32,14 @@ struct Code final : JitCode {
   }
 };
 struct Module {
+  // LLVM 21 replaced direct context access with wrapping an owned LLVMContext.
+#if LLVM_VERSION_MAJOR == 20
+  LLVMOrcThreadSafeContextRef thread_context = LLVMOrcCreateNewThreadSafeContext();
+  LLVMContextRef context = LLVMOrcThreadSafeContextGetContext(thread_context);
+#else
   LLVMContextRef context = LLVMContextCreate();
   LLVMOrcThreadSafeContextRef thread_context = LLVMOrcCreateNewThreadSafeContextFromLLVMContext(context);
+#endif
   LLVMModuleRef module = LLVMModuleCreateWithNameInContext("iris", context);
   LLVMBuilderRef builder = LLVMCreateBuilderInContext(context);
   LLVMBuilderRef parameter_builder = LLVMCreateBuilderInContext(context);
