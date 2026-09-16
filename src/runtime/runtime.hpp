@@ -3,10 +3,15 @@
 #include <memory>
 #include <algorithm>
 namespace iris {
+inline bool uses_llvm(iris_backend b) noexcept {
+  return b == IRIS_BACKEND_LLVM || b == IRIS_BACKEND_SLEEF || b == IRIS_BACKEND_SLEEF_FAST;
+}
 struct CompileOptions {
   uint32_t width = 0, height = 0, input_count = 0;
   iris_format inputs[26]{}, output{};
   int optimize = 0;
+  iris_math_mode math = IRIS_MATH_NATIVE;
+  iris_backend backend = IRIS_BACKEND_SCALAR;
   bool extended_inputs = false;
   iris_expr_options_v1 expr{};
   CompileOptions() = default;
@@ -30,6 +35,8 @@ struct ExecuteArgs {
 struct JitCode {
   using Row = void (*)(const ExecuteArgs*, uint32_t);
   Row row = nullptr;
+  bool vector_math_available = false;
+  size_t vector_math_calls = 0;
   virtual ~JitCode() = default;
 };
 struct Program {

@@ -96,7 +96,7 @@ void run(const Program& p, std::vector<float>& v, const ExecuteArgs& a) noexcept
             float args[3]{};
             for (unsigned j = 0; j < arity(n.op); ++j)
               args[j] = v[n.args[j]];
-            value = evaluate(n.op, args[0], args[1], args[2]);
+            value = evaluate(n.op, args[0], args[1], args[2], o.math);
           }
         }
         v[i] = value;

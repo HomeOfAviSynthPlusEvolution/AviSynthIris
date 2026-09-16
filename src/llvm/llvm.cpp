@@ -13,8 +13,8 @@
 namespace iris {
 namespace {
 // Private native ABI for libm nodes; no process-global symbol lookup is needed.
-extern "C" float iris_host_math(uint32_t op, float a, float c) noexcept {
-  return evaluate(static_cast<Op>(op), a, c);
+extern "C" float iris_host_math(uint32_t op, float a, float c, uint32_t math) noexcept {
+  return evaluate(static_cast<Op>(op), a, c, 0, static_cast<iris_math_mode>(math));
 }
 void check(LLVMErrorRef error) {
   if (!error)
@@ -73,7 +73,28 @@ struct Lowering {
   LLVMValueRef args = nullptr, y = nullptr, x = nullptr;
   LLVMBasicBlockRef entry = nullptr;
   std::map<size_t, LLVMValueRef> fields;
-  explicit Lowering(Module& module) : m(module), b(m.builder) {
+  LLVMOrcLLJITRef jit;
+  bool vector_math;
+  std::vector<LLVMValueRef> vector_functions;
+  void symbol(const std::string& name, uintptr_t address) {
+    LLVMOrcCSymbolMapPair pair{};
+    pair.Name = LLVMOrcLLJITMangleAndIntern(jit, name.c_str());
+    pair.Sym.Address = address;
+    pair.Sym.Flags.GenericFlags = LLVMJITSymbolGenericFlagsExported | LLVMJITSymbolGenericFlagsCallable;
+    auto unit = LLVMOrcAbsoluteSymbols(&pair, 1);
+    auto error = LLVMOrcJITDylibDefine(LLVMOrcLLJITGetMainJITDylib(jit), unit);
+    if (error)
+      LLVMOrcDisposeMaterializationUnit(unit);
+    check(error);
+  }
+  void pure(LLVMValueRef fn) {
+    for (const char* name : {"nounwind", "willreturn", "memory"})
+      LLVMAddAttributeAtIndex(
+          fn, LLVMAttributeFunctionIndex,
+          LLVMCreateEnumAttribute(m.context, LLVMGetEnumAttributeKindForName(name, std::strlen(name)), 0));
+  }
+  explicit Lowering(Module& module, LLVMOrcLLJITRef j, bool vectors)
+      : m(module), b(m.builder), jit(j), vector_math(vectors) {
     f32 = LLVMFloatTypeInContext(m.context);
     i1 = LLVMInt1TypeInContext(m.context);
     i8 = LLVMInt8TypeInContext(m.context);
@@ -139,13 +160,45 @@ struct Lowering {
     auto result = select(cmp(LLVMRealOEQ, ordinary, number(0)), number(0), ordinary);
     return select(cmp(LLVMRealUNO, a, c), number(std::numeric_limits<float>::quiet_NaN()), result);
   }
-  LLVMValueRef math_call(Op op, LLVMValueRef a, LLVMValueRef c) {
-    LLVMTypeRef types[] = {i32, f32, f32};
-    auto type = LLVMFunctionType(f32, types, 3, 0);
+  LLVMValueRef math_call(Op op, LLVMValueRef a, LLVMValueRef c, iris_math_mode math) {
+    if (auto address = scalar_math_address(op, math)) {
+      const unsigned count = arity(op);
+      const std::string name = "iris_math_" + std::to_string(unsigned(op));
+      LLVMTypeRef params[] = {f32, f32};
+      auto type = LLVMFunctionType(f32, params, count, 0);
+      auto fn = LLVMGetNamedFunction(m.module, name.c_str());
+      std::string mapping;
+      uintptr_t vector_address = vector_math ? vector_math_address(op, math) : 0;
+      if (!fn) {
+        fn = LLVMAddFunction(m.module, name.c_str(), type);
+        pure(fn);
+        symbol(name, address);
+        if (vector_address) {
+          auto vector = LLVMVectorType(f32, 8);
+          LLVMTypeRef vp[] = {vector, vector};
+          auto vf = LLVMAddFunction(m.module, (name + "_v8").c_str(), LLVMFunctionType(vector, vp, count, 0));
+          pure(vf);
+          vector_functions.push_back(vf);
+          symbol(name + "_v8", vector_address);
+        }
+      }
+      LLVMValueRef values[] = {a, c};
+      auto call = LLVMBuildCall2(b, type, fn, values, count, "");
+      if (vector_address) {
+        mapping = "_ZGV_LLVM_N8" + std::string(count, 'v') + "_" + name + "(" + name + "_v8)";
+        constexpr char attr[] = "vector-function-abi-variant";
+        LLVMAddCallSiteAttribute(
+            call, LLVMAttributeFunctionIndex,
+            LLVMCreateStringAttribute(m.context, attr, sizeof(attr) - 1, mapping.c_str(), unsigned(mapping.size())));
+      }
+      return call;
+    }
+    LLVMTypeRef types[] = {i32, f32, f32, i32};
+    auto type = LLVMFunctionType(f32, types, 4, 0);
     auto address = LLVMConstInt(iptr, reinterpret_cast<uintptr_t>(&iris_host_math), 0);
     auto fn = LLVMConstIntToPtr(address, ptr);
-    LLVMValueRef args[] = {LLVMConstInt(i32, static_cast<unsigned>(op), 0), a, c};
-    auto call = LLVMBuildCall2(b, type, fn, args, 3, "");
+    LLVMValueRef args[] = {LLVMConstInt(i32, static_cast<unsigned>(op), 0), a, c, LLVMConstInt(i32, math, 0)};
+    auto call = LLVMBuildCall2(b, type, fn, args, 4, "");
     auto nounwind = LLVMCreateEnumAttribute(m.context, LLVMGetEnumAttributeKindForName("nounwind", 8), 0);
     LLVMAddCallSiteAttribute(call, LLVMAttributeFunctionIndex, nounwind);
     return call;
@@ -284,12 +337,12 @@ struct Lowering {
         case Op::Asin:
         case Op::Acos:
         case Op::Atan:
-          v = math_call(n.op, a, number(0));
+          v = math_call(n.op, a, number(0), p.options.math);
           break;
         case Op::Fmod:
         case Op::Pow:
         case Op::Atan2:
-          v = math_call(n.op, a, c);
+          v = math_call(n.op, a, c, p.options.math);
           break;
         case Op::Clip:
           v = minimum_maximum(Op::Max, minimum_maximum(Op::Min, a, d), c);
@@ -336,6 +389,15 @@ struct Lowering {
     LLVMBuildCondBr(b, LLVMBuildICmp(b, LLVMIntULT, next, integer(p.options.width), ""), loop, done);
     LLVMPositionBuilderAtEnd(b, done);
     LLVMBuildRetVoid(b);
+    // The vector declarations are referenced by VFABI string attributes only.
+    // Keep them through early GlobalDCE so the loop vectorizer can find them.
+    if (!vector_functions.empty()) {
+      auto count = unsigned(vector_functions.size());
+      auto used = LLVMAddGlobal(m.module, LLVMArrayType(ptr, count), "llvm.compiler.used");
+      LLVMSetInitializer(used, LLVMConstArray(ptr, vector_functions.data(), count));
+      LLVMSetLinkage(used, LLVMAppendingLinkage);
+      LLVMSetSection(used, "llvm.metadata");
+    }
   }
 };
 } // namespace
@@ -354,7 +416,10 @@ std::shared_ptr<const JitCode> compile_llvm(const Program& p) {
   NativeTarget target(LLVMOrcLLJITGetTripleString(code->jit));
   LLVMSetTarget(m.module, LLVMOrcLLJITGetTripleString(code->jit));
   LLVMSetDataLayout(m.module, LLVMOrcLLJITGetDataLayoutStr(code->jit));
-  Lowering lowering(m);
+  // LLVM host features account for OS AVX state support as well as CPUID.
+  const std::string features = std::string(",") + target.features.get() + ",";
+  bool vectors = features.find(",+avx2,") != std::string::npos && features.find(",+fma,") != std::string::npos;
+  Lowering lowering(m, code->jit, vectors);
   lowering.lower(p);
   auto row = LLVMGetNamedFunction(m.module, "iris_row");
   for (const auto& attribute :
@@ -373,6 +438,16 @@ std::shared_ptr<const JitCode> compile_llvm(const Program& p) {
   auto error = LLVMRunPasses(m.module, "default<O2>", target.machine, passes);
   LLVMDisposePassBuilderOptions(passes);
   check(error);
+  code->vector_math_available = vectors && vector_math_address(Op::Sin, p.options.math) != 0;
+  for (auto block = LLVMGetFirstBasicBlock(row); block; block = LLVMGetNextBasicBlock(block))
+    for (auto instruction = LLVMGetFirstInstruction(block); instruction;
+         instruction = LLVMGetNextInstruction(instruction))
+      if (LLVMIsACallInst(instruction)) {
+        auto called = LLVMGetCalledValue(instruction);
+        const std::string name = LLVMGetValueName(called);
+        if (name.find("iris_math_") == 0 && name.size() >= 3 && name.substr(name.size() - 3) == "_v8")
+          ++code->vector_math_calls;
+      }
   auto module = LLVMOrcCreateNewThreadSafeModule(m.module, m.thread_context);
   m.module = nullptr;
   check(LLVMOrcLLJITAddLLVMIRModule(code->jit, LLVMOrcLLJITGetMainJITDylib(code->jit), module));

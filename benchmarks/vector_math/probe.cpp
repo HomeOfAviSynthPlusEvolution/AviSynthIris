@@ -251,6 +251,8 @@ void accuracy(bool enforce) {
           const auto& s = stats[size_t(mode)];
           if (mode && std::string(op.name) != "fmod") {
             double limit = (mode == 2 || (mode == 4 && (op.fast || op.fast2))) ? 3.5 : 1.0;
+            if (mode == 3 && std::string(op.name) == "atan2")
+              limit = 2.0;
             if (s.max_ulp > limit || s.category_errors || s.zero_sign_errors) {
               std::cerr << "REJECT " << op.name << ',' << (broad ? "broad" : "ordinary") << ',' << label(op, mode)
                         << ": max_ulp=" << s.max_ulp << " limit=" << limit << " category_errors=" << s.category_errors

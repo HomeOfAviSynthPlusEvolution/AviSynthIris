@@ -1,4 +1,5 @@
 #include "avs_host.hpp"
+#include "iris/iris.h"
 #include <algorithm>
 #include <iostream>
 #include <limits>
@@ -437,6 +438,26 @@ void lut_adapter(AvsApi& api, AVS_ScriptEnvironment* env, const char* backend) {
     check_uniform(api, prefetched->clip, {1, 1, 1}, n);
   std::cout << "Manual LUT plugin snapshots, formats, aggregate budgets and diagnostics passed: " << backend << '\n';
 }
+void math_adapter(AvsApi& api, AVS_ScriptEnvironment* env) {
+  std::string source = "Expr(BlankClip(width=129,height=3,pixel_type=\"Y8\"),\"0\")";
+  expect_script_error(api, env, "IrisExpr(" + source + ",\"x\",math=\"fast\")", {});
+  for (auto profile :
+       {std::make_pair("sleef", IRIS_BACKEND_SLEEF), std::make_pair("sleef-fast", IRIS_BACKEND_SLEEF_FAST)}) {
+    std::string suffix = ",backend=\"" + std::string(profile.first) + "\")";
+    if (!iris_backend_available(profile.second)) {
+      for (const char* expr : {"x", "", "0"})
+        expect_script_error(api, env, "IrisExpr(" + source + ",\"" + expr + "\"" + suffix, {"requires"});
+      continue;
+    }
+    for (const char* expression : {"x cos", "0 cos"})
+      for (int lut : {0, 1}) {
+        auto clip = script_clip(api, env,
+                                "IrisExpr(" + source + ",\"" + expression +
+                                    "\",format=\"Y32\",lut=" + std::to_string(lut) + suffix);
+        check_uniform(api, clip->clip, {1});
+      }
+  }
+}
 void expr_lifecycle(AvsApi& api, AVS_ScriptEnvironment* env, const char* backend) {
   std::string suffix = std::string(",backend=\"") + backend + "\")";
   std::string source = "Expr(BlankClip(width=18,height=10,length=64,pixel_type=\"YV12\"),\"7\")";
@@ -504,6 +525,7 @@ int wmain(int argc, wchar_t** argv) {
       expr_adapter(api, env, "scalar");
       lut_adapter(api, env, "scalar");
       expr_lifecycle(api, env, "scalar");
+      math_adapter(api, env);
 #ifdef IRIS_TEST_LLVM
       property_contract(api, env, "llvm");
       test(api, env, "llvm", false);

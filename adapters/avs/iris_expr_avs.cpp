@@ -224,7 +224,7 @@ AVS_Value AVSC_CC create(AVS_ScriptEnvironment* env, AVS_Value args, void* user)
     if (f->count < 1 || f->count > 4 || expr_count < 1 || expr_count > f->count)
       throw std::runtime_error("IrisExpr: invalid expression count");
     auto backend_name = string_option(args, 3, "scalar");
-    if (backend_name != "scalar" && backend_name != "llvm")
+    if (backend_name != "scalar" && backend_name != "llvm" && backend_name != "sleef" && backend_name != "sleef-fast")
       throw std::runtime_error("IrisExpr: unknown backend");
     auto scaling = string_option(args, 4, "none");
     for (auto& c : scaling)
@@ -253,7 +253,10 @@ AVS_Value AVSC_CC create(AVS_ScriptEnvironment* env, AVS_Value args, void* user)
       o.input_count = uint32_t(inputs);
       o.output = format(api, vi);
       o.optimize = bool_option(args, 7, true);
-      o.backend = backend_name == "llvm" ? IRIS_BACKEND_LLVM : IRIS_BACKEND_SCALAR;
+      o.backend = backend_name == "llvm"         ? IRIS_BACKEND_LLVM
+                  : backend_name == "sleef"      ? IRIS_BACKEND_SLEEF
+                  : backend_name == "sleef-fast" ? IRIS_BACKEND_SLEEF_FAST
+                                                 : IRIS_BACKEND_SCALAR;
       for (int j = 0; j < inputs; ++j)
         o.inputs[j] = format(api, f->formats[j]);
       iris_expr_options_v1 e{};

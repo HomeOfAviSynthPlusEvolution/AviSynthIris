@@ -15,7 +15,11 @@ unsigned arity(Op op) {
 Type result_type(Op op) {
   return op == Op::ToBool || (op >= Op::Lt && op <= Op::Not) ? Type::Bool : Type::Number;
 }
-float evaluate(Op op, float a, float b, float c) noexcept {
+float evaluate(Op op, float a, float b, float c, iris_math_mode math) noexcept {
+  float math_result;
+  if (((op >= Op::Exp && op <= Op::Atan) || op == Op::Pow || op == Op::Atan2) &&
+      evaluate_math(op, a, b, math, math_result))
+    return math_result;
   switch (op) {
     case Op::ToBool:
       return a > 0;
@@ -138,7 +142,7 @@ void verify(const IR& ir) {
   if (ir.nodes[ir.result].type != Type::Number)
     bad();
 }
-void optimize(IR& ir) {
+void optimize(IR& ir, iris_math_mode math) {
   for (auto& n : ir.nodes) {
     const unsigned count = arity(n.op);
     if (!count)
@@ -151,7 +155,7 @@ void optimize(IR& ir) {
       v[j] = a.value;
     }
     if (constant) {
-      n.value = evaluate(n.op, v[0], v[1], v[2]);
+      n.value = evaluate(n.op, v[0], v[1], v[2], math);
       n.op = Op::Constant;
     }
   }

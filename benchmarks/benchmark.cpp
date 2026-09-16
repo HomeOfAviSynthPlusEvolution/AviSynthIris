@@ -8,6 +8,7 @@
 #include <vector>
 
 namespace {
+iris_backend selected_backend = IRIS_BACKEND_LLVM;
 using Clock = std::chrono::steady_clock;
 double elapsed(Clock::time_point start) {
   return std::chrono::duration<double, std::milli>(Clock::now() - start).count();
@@ -79,7 +80,7 @@ void benchmark(uint32_t bits, bool complex, bool random, bool quick) {
   for (int strategy = 0; strategy < 3; ++strategy) {
     if (strategy == 1 && !iris::llvm_available())
       continue;
-    iris_backend backend = strategy == 0 || !iris::llvm_available() ? IRIS_BACKEND_SCALAR : IRIS_BACKEND_LLVM;
+    iris_backend backend = strategy == 0 || !iris::llvm_available() ? IRIS_BACKEND_SCALAR : selected_backend;
     iris_compile_options_v1 o{};
     o.struct_size = sizeof(o);
     o.width = width;
@@ -144,11 +145,14 @@ void benchmark(uint32_t bits, bool complex, bool random, bool quick) {
         float expected = complex
                              ? std::sqrt(std::abs(std::sin(float(a) * 0.001f)) + std::abs(std::cos(float(b) * 0.001f)))
                              : float(a + b) * 0.5f;
-        if (std::abs(output[i] - expected) > 2 * std::numeric_limits<float>::epsilon())
+        if (std::abs(output[i] - expected) > (complex ? 1e-6f : 0.0f))
           throw std::runtime_error("benchmark independent oracle mismatch");
       }
-    } else if (std::memcmp(output.data(), reference.data(), pixels * sizeof(float)) != 0)
-      throw std::runtime_error("benchmark strategy result mismatch");
+    } else {
+      for (size_t i = 0; i < pixels; ++i)
+        if (!std::isfinite(output[i]) || std::abs(output[i] - reference[i]) > (complex ? 1e-6f : 0.0f))
+          throw std::runtime_error("benchmark strategy result mismatch");
+    }
     auto t = measure(run, quick ? 2 : 100);
     iris_plan_info info{};
     iris_plan_get_info(plan.get(), &info, nullptr);
@@ -158,20 +162,35 @@ void benchmark(uint32_t bits, bool complex, bool random, bool quick) {
               << (strategy == 0   ? "scalar"
                   : strategy == 1 ? "llvm"
                                   : "manual_lut")
-              << ',' << (backend == IRIS_BACKEND_LLVM ? "llvm" : "scalar") << ',' << width << ',' << height << ','
-              << first_compile << ',' << compilation[1] << ',' << build_ms << ',' << t.minimum << ',' << t.median << ','
-              << t.maximum << ',' << double(pixels) / (t.median * 1000) << ',' << t.repetitions << ','
-              << (lut ? lut->storage_bytes() : 0) << ',' << info.instruction_count << ',' << dump_bytes << ','
-              << checksum(output) << '\n'
+              << ','
+              << (backend == IRIS_BACKEND_SCALAR  ? "scalar"
+                  : backend == IRIS_BACKEND_LLVM  ? "llvm"
+                  : backend == IRIS_BACKEND_SLEEF ? "sleef"
+                                                  : "sleef-fast")
+              << ',' << width << ',' << height << ',' << first_compile << ',' << compilation[1] << ',' << build_ms
+              << ',' << t.minimum << ',' << t.median << ',' << t.maximum << ',' << double(pixels) / (t.median * 1000)
+              << ',' << t.repetitions << ',' << (lut ? lut->storage_bytes() : 0) << ',' << info.instruction_count << ','
+              << dump_bytes << ',' << checksum(output) << '\n'
               << std::flush;
   }
 }
 } // namespace
 int main(int argc, char** argv) {
   try {
-    bool quick = argc == 2 && std::string(argv[1]) == "--quick";
-    if (argc > 2 || (argc == 2 && !quick))
-      throw std::runtime_error("usage: iris_benchmark [--quick]");
+    bool quick = false;
+    for (int i = 1; i < argc; ++i) {
+      std::string option = argv[i];
+      if (option == "--quick")
+        quick = true;
+      else if (option == "--sleef")
+        selected_backend = IRIS_BACKEND_SLEEF;
+      else if (option == "--sleef-fast")
+        selected_backend = IRIS_BACKEND_SLEEF_FAST;
+      else
+        throw std::runtime_error("usage: iris_benchmark [--quick] [--sleef|--sleef-fast]");
+    }
+    if (selected_backend != IRIS_BACKEND_LLVM && !iris_backend_available(selected_backend))
+      throw std::runtime_error("selected benchmark backend requires LLVM and SLEEF");
     std::cout << std::fixed << std::setprecision(6)
               << "bits,expression,pattern,strategy,generation_backend,width,height,first_compile_ms,compile_median_ms,"
                  "lut_build_ms,execute_min_ms,execute_median_ms,execute_max_ms,megapixels_per_second,repetitions,"

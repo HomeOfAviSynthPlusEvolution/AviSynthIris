@@ -33,7 +33,16 @@ typedef struct iris_compile_options {
 } iris_compile_options;
 /* COMPUTE is backend independent. NONE means a fill/copy/LUT strategy. */
 typedef enum iris_strategy { IRIS_COMPUTE, IRIS_FILL, IRIS_COPY, IRIS_LUT_U8 } iris_strategy;
-typedef enum iris_backend { IRIS_BACKEND_NONE, IRIS_BACKEND_SCALAR, IRIS_BACKEND_LLVM } iris_backend;
+/* scalar/llvm use host libm. SLEEF profiles require both LLVM and SLEEF;
+   SLEEF_FAST selects u35 where available, otherwise u10. */
+typedef enum iris_backend {
+  IRIS_BACKEND_NONE,
+  IRIS_BACKEND_SCALAR,
+  IRIS_BACKEND_LLVM,
+  IRIS_BACKEND_SLEEF,
+  IRIS_BACKEND_SLEEF_FAST
+} iris_backend;
+int iris_backend_available(int backend);
 enum {
   IRIS_DEP_SX = 1,
   IRIS_DEP_SY = 2,
@@ -117,7 +126,7 @@ iris_status iris_compile_expr_v1(const char*, const iris_compile_options_v1*, co
 iris_status iris_compile(const char*, const iris_compile_options*, iris_plan**, iris_diagnostic*);
 /* Additive experimental API. Legacy compile selects scalar with LUT disabled.
    enable_lut=1 permits a bounded U8 table when eligible; otherwise compute.
-   Explicit LLVM requests fail when LLVM is unavailable; never silently fall back. */
+   Explicit LLVM/SLEEF requests fail when LLVM is unavailable; never silently fall back. */
 iris_status iris_compile_ex(const char*, const iris_compile_options*, iris_backend, int enable_lut, iris_plan**,
                             iris_diagnostic*);
 iris_status iris_plan_get_backend(const iris_plan*, iris_backend*, iris_diagnostic*);

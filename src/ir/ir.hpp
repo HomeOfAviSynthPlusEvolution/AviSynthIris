@@ -7,6 +7,7 @@
 #include <vector>
 namespace iris {
 constexpr size_t max_source = 65536, max_nodes = 8192;
+enum iris_math_mode { IRIS_MATH_NATIVE, IRIS_MATH_ACCURATE, IRIS_MATH_FAST };
 enum class Type { Number, Bool };
 enum class Op {
   Constant,
@@ -87,10 +88,14 @@ struct Error : std::runtime_error {
 }
 unsigned arity(Op);
 Type result_type(Op);
-float evaluate(Op, float, float = 0, float = 0) noexcept;
+float evaluate(Op, float, float = 0, float = 0, iris_math_mode = IRIS_MATH_NATIVE) noexcept;
+uintptr_t scalar_math_address(Op, iris_math_mode) noexcept;
+uintptr_t vector_math_address(Op, iris_math_mode) noexcept;
+bool math_available(iris_math_mode) noexcept;
+bool evaluate_math(Op, float, float, iris_math_mode, float&) noexcept;
 IR parse(const std::string&, uint32_t input_count, bool extended_inputs = false, const iris_format* formats = nullptr,
          const iris_expr_options_v1* expr = nullptr);
 void verify(const IR&);
-void optimize(IR&);
+void optimize(IR&, iris_math_mode = IRIS_MATH_NATIVE);
 std::string dump(const IR&);
 } // namespace iris

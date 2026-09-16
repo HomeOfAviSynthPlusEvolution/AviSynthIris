@@ -39,10 +39,15 @@ static iris_status compile_normalized(const char* s, const iris::CompileOptions*
   return guard(d, [&] {
     if (!s || !o || !out)
       iris::fail("null compile argument");
-    if ((backend != IRIS_BACKEND_SCALAR && backend != IRIS_BACKEND_LLVM) || (enable_lut != 0 && enable_lut != 1))
+    if ((backend != IRIS_BACKEND_SCALAR && !iris::uses_llvm(backend)) || (enable_lut != 0 && enable_lut != 1))
       iris::fail("invalid backend or LUT option");
-    if (backend == IRIS_BACKEND_LLVM && !iris::llvm_available())
-      throw iris::Error(IRIS_BACKEND_UNAVAILABLE, "LLVM was disabled at build time");
+    if (iris::uses_llvm(backend) && !iris::llvm_available())
+      throw iris::Error(IRIS_BACKEND_UNAVAILABLE, "LLVM was disabled at build time; selected backend requires LLVM");
+    const auto math = backend == IRIS_BACKEND_SLEEF        ? iris::IRIS_MATH_ACCURATE
+                      : backend == IRIS_BACKEND_SLEEF_FAST ? iris::IRIS_MATH_FAST
+                                                           : iris::IRIS_MATH_NATIVE;
+    if (!iris::math_available(math))
+      throw iris::Error(IRIS_BACKEND_UNAVAILABLE, "selected backend requires a build with SLEEF");
     iris::validate_options(*o);
     size_t len = 0;
     while (len <= iris::max_source && s[len])
@@ -51,17 +56,19 @@ static iris_status compile_normalized(const char* s, const iris::CompileOptions*
       throw iris::Error(IRIS_LIMIT_EXCEEDED, "expression length limit exceeded");
     auto p = std::make_shared<iris::Program>();
     p->options = *o;
+    p->options.math = math;
+    p->options.backend = backend;
     p->ir = iris::parse(std::string(s, len), o->input_count, o->extended_inputs, o->inputs,
                         o->expr.struct_size ? &o->expr : nullptr);
     iris::verify(p->ir);
     if (o->optimize) {
-      iris::optimize(p->ir);
+      iris::optimize(p->ir, math);
       iris::verify(p->ir);
     }
     iris::describe(*p);
     if (enable_lut)
       iris::prepare_lut(*p);
-    if (backend == IRIS_BACKEND_LLVM && p->info.strategy == IRIS_COMPUTE)
+    if (iris::uses_llvm(backend) && p->info.strategy == IRIS_COMPUTE)
       p->jit = iris::compile_llvm(*p);
     *out = new iris_plan{std::move(p)};
   });
@@ -116,6 +123,15 @@ iris_status iris_compile_expr_v1(const char* s, const iris_compile_options_v1* o
   }
   return compile_v1(s, o, expr, out, d);
 }
+int iris_backend_available(int backend) {
+  if (backend == IRIS_BACKEND_SCALAR)
+    return 1;
+  if (backend == IRIS_BACKEND_LLVM)
+    return iris::llvm_available();
+  if (backend == IRIS_BACKEND_SLEEF || backend == IRIS_BACKEND_SLEEF_FAST)
+    return iris::llvm_available() && iris::math_available(iris::IRIS_MATH_ACCURATE);
+  return 0;
+}
 void iris_plan_destroy(iris_plan* p) {
   delete p;
 }
@@ -124,7 +140,7 @@ iris_status iris_plan_get_backend(const iris_plan* p, iris_backend* backend, iri
     if (!p || !backend)
       iris::fail("null backend query");
     *backend = p->program->info.strategy != IRIS_COMPUTE ? IRIS_BACKEND_NONE
-               : p->program->jit                         ? IRIS_BACKEND_LLVM
+               : p->program->jit                         ? p->program->options.backend
                                                          : IRIS_BACKEND_SCALAR;
   });
 }

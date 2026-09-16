@@ -106,9 +106,9 @@ ManualLut::ManualLut(const iris_plan& plan, iris_backend backend) : backend_(bac
   const auto& source = *plan.program;
   if (source.options.input_count < 1 || source.options.input_count > 2)
     fail("manual LUT requires one or two inputs");
-  if (backend != IRIS_BACKEND_SCALAR && backend != IRIS_BACKEND_LLVM)
+  if (backend != IRIS_BACKEND_SCALAR && !uses_llvm(backend))
     fail("invalid LUT generation backend");
-  if (backend == IRIS_BACKEND_LLVM && !llvm_available())
+  if (uses_llvm(backend) && !llvm_available())
     throw Error(IRIS_BACKEND_UNAVAILABLE, "LLVM was disabled at build time");
   evaluation_.options = source.options;
   evaluation_.options.width = chunk;
@@ -147,7 +147,7 @@ void ManualLut::build(const std::vector<float>& properties) {
   try {
     // No value initialization: each byte is written by the shared output path.
     auto table = std::unique_ptr<unsigned char[]>(new unsigned char[size_t(storage_bytes_)]);
-    if (backend_ == IRIS_BACKEND_LLVM && evaluation_.info.strategy == IRIS_COMPUTE)
+    if (uses_llvm(backend_) && evaluation_.info.strategy == IRIS_COMPUTE)
       evaluation_.jit = compile_llvm(evaluation_);
     std::vector<float> scratch(evaluation_.ir.nodes.size());
     std::array<std::array<unsigned char, chunk * 2>, 2> input{};
