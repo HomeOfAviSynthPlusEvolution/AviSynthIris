@@ -8,6 +8,11 @@
 namespace iris {
 constexpr size_t max_source = 65536, max_nodes = 8192;
 enum iris_math_mode { IRIS_MATH_NATIVE, IRIS_MATH_ACCURATE, IRIS_MATH_FAST };
+// Restricted gamma domain for the explicitly selected fast math profile.
+constexpr float fast_pow_min_base = 1.0f / 65535.0f;
+inline bool fast_pow_domain(float base, float exponent) noexcept {
+  return base >= fast_pow_min_base && base <= 1.0f && exponent >= 0.25f && exponent <= 4.0f;
+}
 enum class Type { Number, Bool };
 enum class Op {
   Constant,

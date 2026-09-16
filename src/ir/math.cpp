@@ -3,6 +3,15 @@
 #include <sleef.h>
 #endif
 namespace iris {
+#ifdef IRIS_WITH_SLEEF
+namespace {
+float fast_pow(float base, float exponent) {
+  if (fast_pow_domain(base, exponent))
+    return Sleef_exp2f1_u35purec(exponent * Sleef_log2f1_u35purec(base));
+  return Sleef_powf1_u10purec(base, exponent);
+}
+} // namespace
+#endif
 bool math_available(iris_math_mode mode) noexcept {
   if (mode == IRIS_MATH_NATIVE)
     return true;
@@ -32,7 +41,7 @@ uintptr_t scalar_math_address(Op op, iris_math_mode mode) noexcept {
     case Op::Exp:
       return reinterpret_cast<uintptr_t>(&Sleef_expf1_u10purec);
     case Op::Pow:
-      return reinterpret_cast<uintptr_t>(&Sleef_powf1_u10purec);
+      return reinterpret_cast<uintptr_t>(fast ? &fast_pow : &Sleef_powf1_u10purec);
     default:
       return 0;
   }
@@ -69,7 +78,7 @@ bool evaluate_math(Op op, float a, float b, iris_math_mode mode, float& result) 
       result = Sleef_expf1_u10purec(a);
       return true;
     case Op::Pow:
-      result = Sleef_powf1_u10purec(a, b);
+      result = fast ? fast_pow(a, b) : Sleef_powf1_u10purec(a, b);
       return true;
     case Op::Atan2:
       result = fast ? Sleef_atan2f1_u35purec(a, b) : Sleef_atan2f1_u10purec(a, b);

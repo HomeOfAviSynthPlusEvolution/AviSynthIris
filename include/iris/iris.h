@@ -34,7 +34,9 @@ typedef struct iris_compile_options {
 /* COMPUTE is backend independent. NONE means a fill/copy/LUT strategy. */
 typedef enum iris_strategy { IRIS_COMPUTE, IRIS_FILL, IRIS_COPY, IRIS_LUT_U8 } iris_strategy;
 /* scalar/llvm use host libm. SLEEF profiles require both LLVM and SLEEF;
-   SLEEF_FAST selects u35 where available, otherwise u10. */
+   SLEEF_FAST selects u35 where available, otherwise u10. For pow, bases in
+   [1/65535,1] and exponents in [0.25,4] may use exp2/log2 with a 1e-6
+   absolute-error acceptance threshold; other inputs retain u10. */
 typedef enum iris_backend {
   IRIS_BACKEND_NONE,
   IRIS_BACKEND_SCALAR,

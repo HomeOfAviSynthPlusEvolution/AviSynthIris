@@ -80,6 +80,114 @@ iris_status execute(const Plan& p, const iris_execute_args_v1& a, iris_backend e
   iris::execute_program(program, scratch, args);
   return IRIS_OK;
 }
+void gamma_pow(iris_backend executor) {
+  if (!iris_backend_available(IRIS_BACKEND_SLEEF_FAST))
+    return;
+  iris_compile_options_v1 o{};
+  o.struct_size = sizeof(o);
+  o.height = 1;
+  o.input_count = 2;
+  o.inputs[0] = o.inputs[1] = o.output = {IRIS_F32, 32};
+  iris_diagnostic d{};
+  for (auto profile : {IRIS_BACKEND_SLEEF, IRIS_BACKEND_SLEEF_FAST})
+    for (int optimized : {0, 1}) {
+      o.backend = profile;
+      o.optimize = optimized;
+      o.width = 65536;
+      Plan plan;
+      check(iris_compile_v1("x y pow", &o, &plan.p, &d), d);
+      check(iris_context_create(plan.p, &plan.c, &d), d);
+      std::vector<float> x(o.width), y(o.width), out(o.width);
+      iris_execute_args_v1 args{};
+      args.struct_size = sizeof(args);
+      args.input_count = 2;
+      args.inputs[0] = {x.data(), o.width * 4};
+      args.inputs[1] = {y.data(), o.width * 4};
+      args.output = {out.data(), o.width * 4};
+      auto verify = [&] {
+        check(execute(plan, args, executor, d), d);
+        for (size_t i = 0; i < x.size(); ++i) {
+          auto reference = oracle("pow", x[i], y[i]);
+          if (profile == IRIS_BACKEND_SLEEF_FAST && x[i] >= 1.0f / 65535 && x[i] <= 1 && y[i] >= .25f && y[i] <= 4)
+            CHECK(std::abs(static_cast<long double>(out[i]) - reference) <= 1e-6L);
+          else
+            near(out[i], reference, 1);
+        }
+      };
+      for (float exponent : {.25f, .454545f, 1.8f, 2.2f, 4.0f}) {
+        for (size_t i = 0; i < x.size(); ++i) {
+          x[i] = float(i) / 65535;
+          y[i] = exponent;
+        }
+        verify();
+      }
+      const float pairs[][2] = {{0, .5f},
+                                {-0.0f, 3},
+                                {-2, 3},
+                                {-2, .5f},
+                                {INFINITY, 2},
+                                {NAN, 2},
+                                {1, NAN},
+                                {NAN, 0},
+                                {.5f, INFINITY},
+                                {.5f, -INFINITY},
+                                {.5f, 0},
+                                {.5f, -1},
+                                {.5f, std::nextafter(.25f, 0.f)},
+                                {.5f, std::nextafter(4.f, 5.f)},
+                                {std::nextafter(1.f, 2.f), .5f},
+                                {std::nextafter(1.f / 65535, 0.f), .5f},
+                                {std::numeric_limits<float>::denorm_min(), .5f}};
+      for (const auto& pair : pairs) {
+        std::fill(x.begin(), x.end(), .375f);
+        std::fill(y.begin(), y.end(), .454545f);
+        // Mixed SIMD groups, then a valid region; include both ends of the row.
+        for (size_t index : {size_t(0), size_t(7), size_t(8), size_t(65535)}) {
+          x[index] = pair[0];
+          y[index] = pair[1];
+        }
+        verify();
+      }
+      o.input_count = 1;
+      o.inputs[0] = {IRIS_U8, 8};
+      o.width = 256;
+      std::vector<uint8_t> input(256);
+      for (size_t i = 0; i < 256; ++i)
+        input[i] = uint8_t(i);
+      for (int automatic : {0, 1}) {
+        o.enable_lut = automatic;
+        Plan lutplan;
+        check(iris_compile_v1("x 255 / 0.454545 pow", &o, &lutplan.p, &d), d);
+        check(iris_context_create(lutplan.p, &lutplan.c, &d), d);
+        args.input_count = 1;
+        args.inputs[0] = {input.data(), 256};
+        args.output = {out.data(), 1024};
+        check(execute(lutplan, args, executor, d), d);
+        auto check_table = [&] {
+          for (size_t i = 0; i < 256; ++i)
+            CHECK(std::abs(static_cast<long double>(out[i]) - oracle("pow", float(i) / 255, .454545f)) <= 1e-6L);
+        };
+        check_table();
+        ManualLut table(*lutplan.p, executor);
+        table.build({});
+        table.apply(args.inputs, args.output, 256, 1);
+        check_table();
+      }
+      o.enable_lut = 0;
+      o.input_count = 2;
+      o.inputs[0] = {IRIS_F32, 32};
+      o.width = 1;
+      Plan folded;
+      check(iris_compile_v1("0.375 0.454545 pow", &o, &folded.p, &d), d);
+      check(iris_context_create(folded.p, &folded.c, &d), d);
+      args.input_count = 2;
+      args.inputs[0] = {x.data(), 4};
+      args.inputs[1] = {y.data(), 4};
+      args.output = {out.data(), 4};
+      check(execute(folded, args, executor, d), d);
+      CHECK(std::abs(static_cast<long double>(out[0]) - oracle("pow", .375f, .454545f)) <= 1e-6L);
+    }
+}
 void run(iris_backend backend) {
   iris_compile_options_v1 o{};
   o.struct_size = sizeof(o);
@@ -158,7 +266,10 @@ void run(iris_backend backend) {
               std::memcpy(&w, b.data() + 1 + row * stride + x * 4, 4);
               std::memcpy(&r, out.data() + 1 + row * stride + x * 4, 4);
               try {
-                near(r, oracle(name, v, w), limit);
+                if (mode == IRIS_MATH_FAST && name == "pow" && v >= 1.0f / 65535 && v <= 1 && w >= .25f && w <= 4)
+                  CHECK(std::abs(static_cast<long double>(r) - oracle(name, v, w)) <= 1e-6L);
+                else
+                  near(r, oracle(name, v, w), limit);
               } catch (...) {
                 std::cerr << name << " mode=" << mode << " x=" << v << " y=" << w << " actual=" << r
                           << " reference=" << oracle(name, v, w) << '\n';
@@ -256,6 +367,7 @@ void run(iris_backend backend) {
 int main(int argc, char**) {
   try {
     run(argc > 1 ? IRIS_BACKEND_LLVM : IRIS_BACKEND_SCALAR);
+    gamma_pow(argc > 1 ? IRIS_BACKEND_LLVM : IRIS_BACKEND_SCALAR);
   } catch (const std::exception& e) {
     std::cerr << e.what() << '\n';
     return 1;

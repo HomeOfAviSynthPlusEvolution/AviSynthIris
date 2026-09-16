@@ -1,6 +1,19 @@
 #include "ir.hpp"
 #include <sleef.h>
 namespace iris {
+namespace {
+__m256 fast_pow(__m256 base, __m256 exponent) {
+  auto bases = _mm256_and_ps(_mm256_cmp_ps(base, _mm256_set1_ps(fast_pow_min_base), _CMP_GE_OQ),
+                             _mm256_cmp_ps(base, _mm256_set1_ps(1.0f), _CMP_LE_OQ));
+  auto exponents = _mm256_and_ps(_mm256_cmp_ps(exponent, _mm256_set1_ps(0.25f), _CMP_GE_OQ),
+                                 _mm256_cmp_ps(exponent, _mm256_set1_ps(4.0f), _CMP_LE_OQ));
+  // A mixed vector falls back as a whole: never evaluate log/exp on invalid
+  // lanes or pay for both implementations on the common all-gamma path.
+  if (_mm256_movemask_ps(_mm256_and_ps(bases, exponents)) == 255)
+    return Sleef_exp2f8_u35avx2(_mm256_mul_ps(exponent, Sleef_log2f8_u35avx2(base)));
+  return Sleef_powf8_u10avx2(base, exponent);
+}
+} // namespace
 // Only call after checking native AVX2/FMA availability. This translation unit
 // is compiled for AVX2; no vector types leak through Iris's public or private ABI.
 uintptr_t vector_math_address(Op op, iris_math_mode mode) noexcept {
@@ -22,7 +35,7 @@ uintptr_t vector_math_address(Op op, iris_math_mode mode) noexcept {
     case Op::Exp:
       return reinterpret_cast<uintptr_t>(&Sleef_expf8_u10avx2);
     case Op::Pow:
-      return reinterpret_cast<uintptr_t>(&Sleef_powf8_u10avx2);
+      return reinterpret_cast<uintptr_t>(fast ? &fast_pow : &Sleef_powf8_u10avx2);
     default:
       return 0;
   }
