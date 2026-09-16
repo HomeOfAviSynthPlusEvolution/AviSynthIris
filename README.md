@@ -61,7 +61,7 @@ add_subdirectory(third_party/iris)
 target_link_libraries(MyHost PRIVATE Iris::Iris)
 ```
 
-Use matching headers and libraries. The C boundary exposes no C++ or LLVM types, and C++ exceptions do not cross it. This is a joint source-build integration, not a promise of a stable standalone DLL ABI. Final linking requires the C++ runtime.
+Use matching headers and libraries. The C boundary exposes no C++ or LLVM types, and C++ exceptions do not cross it. Integration uses a joint source build with static linking. Final linking requires the C++ runtime.
 
 The public API is [include/iris/iris.h](include/iris/iris.h). Compile with `iris_compile_v1` or `iris_compile_expr_v1`, query input/property dependencies, create an execution context, and call `iris_execute_v1`. Set each versioned structure's `struct_size` to its exact `sizeof`. A plan can be shared; the same context must not execute concurrently. Callers provide valid buffers, signed byte strides, and nonoverlapping input/output storage. See the [C example](examples/example.c).
 
@@ -84,8 +84,6 @@ SLEEF is not supported on Windows ARM64/ARM64EC; keep `IRIS_SLEEF=OFF` on these 
 
 The AviSynthMinus native adapter uses the internal static [host bridge](include/iris/host.h) and declares `MT_NICE_FILTER`. It shares plans, JIT code, and built LUTs, while keeping frame references, properties, contexts, and diagnostics local to each request. The bridge inherits the plan's backend when creating a manual LUT.
 
-The optional Windows C plugin builds with `IRIS_AVS=ON` and `IRIS_AVS_INCLUDE_DIR` pointing to the SDK headers. With tests enabled, also supply `IRIS_AVS_RUNTIME`, an absolute path to an existing AviSynth DLL. The plugin is named `IrisExpr.dll`; load it with `LoadPlugin` before calling `IrisExpr`. This separate C plugin remains `MT_SERIALIZED` because of mutable state in the public AVS C wrapper.
-
 ```avs
 IrisExpr(clip, "x 2 *", backend="llvm")
 IrisExpr(a, b, "x y + 0.5 *", backend="sleef")
@@ -98,7 +96,7 @@ Manual `lut=1` and `lut=2` require one and two integer inputs respectively. They
 
 ## Testing
 
-Standalone tests cover parsing, numerical rules, mixed formats, properties, signed strides, memory boundaries, plan/context lifetimes, concurrent execution, and scalar/LLVM comparisons. Pure C tests exercise the public API and internal LUT bridge. Optional AVS tests cover script behavior, formats, metadata, LUT budgets, and plugin loading; the native host has separate NICE concurrency tests.
+Standalone tests cover parsing, numerical rules, mixed formats, properties, signed strides, memory boundaries, plan/context lifetimes, concurrent execution, and scalar/LLVM comparisons. Pure C tests exercise the public API and internal LUT bridge. The native AviSynthMinus host has separate NICE concurrency tests.
 
 Clang/GCC builds can enable `IRIS_SANITIZE=ON` for ASan/UBSan; prebuilt dependencies and JIT-generated machine code are outside that instrumentation.
 

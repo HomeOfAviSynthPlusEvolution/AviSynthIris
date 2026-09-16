@@ -61,7 +61,7 @@ add_subdirectory(third_party/iris)
 target_link_libraries(MyHost PRIVATE Iris::Iris)
 ```
 
-対応するヘッダーとライブラリーを組み合わせてください。C 境界は C++ や LLVM の型を公開せず、C++ 例外も境界を越えません。対応する組み込み方法はソースを一緒にビルドする方式であり、独立 DLL の安定した ABI を保証するものではありません。最終リンクには C++ ランタイムが必要です。
+対応するヘッダーとライブラリーを組み合わせてください。C 境界は C++ や LLVM の型を公開せず、C++ 例外も境界を越えません。ソースを一緒にビルドし、静的リンクで組み込みます。最終リンクには C++ ランタイムが必要です。
 
 公開 API は [include/iris/iris.h](include/iris/iris.h) にあります。`iris_compile_v1` または `iris_compile_expr_v1` でコンパイルし、入力・プロパティ依存関係を照会して context を作成し、`iris_execute_v1` を呼び出します。バージョン付き構造体の `struct_size` は、その構造体の正確な `sizeof` に設定してください。plan は共有できますが、同じ context を同時実行することはできません。呼び出し側が有効なバッファー、符号付きバイト stride、重複しない入出力領域を提供します。[C サンプル](examples/example.c) を参照してください。
 
@@ -84,8 +84,6 @@ Windows ARM64/ARM64EC は SLEEF に対応していないため、これらのタ
 
 AviSynthMinus のネイティブアダプターは内部の静的 [ホストブリッジ](include/iris/host.h) を使用し、`MT_NICE_FILTER` を宣言します。plan、JIT コード、構築済み LUT を共有し、フレーム参照、プロパティ、context、診断は要求ごとに保持します。手動 LUT の作成時には plan が選択したバックエンドを引き継ぎます。
 
-任意の Windows C プラグインは `IRIS_AVS=ON` でビルドし、`IRIS_AVS_INCLUDE_DIR` に SDK ヘッダーのディレクトリーを指定します。テストを有効にする場合は、既存の AviSynth DLL の絶対パスを `IRIS_AVS_RUNTIME` に指定します。プラグイン名は `IrisExpr.dll` です。`LoadPlugin` で読み込んだ後に `IrisExpr` を呼び出します。公開 AVS C ラッパーに可変状態があるため、この独立 C プラグインは引き続き `MT_SERIALIZED` を宣言します。
-
 ```avs
 IrisExpr(clip, "x 2 *", backend="llvm")
 IrisExpr(a, b, "x y + 0.5 *", backend="sleef")
@@ -98,7 +96,7 @@ IrisExpr(clip, "x 255 / 0.45 pow 255 *", backend="sleef-fast")
 
 ## テスト
 
-単独テストは解析、数値規則、形式の混在、プロパティ、符号付き stride、メモリー境界、plan/context の寿命、並列実行、スカラーと LLVM の比較を検証します。純粋な C のテストで公開 API と内部 LUT ブリッジを確認します。任意の AVS テストはスクリプト動作、形式、メタデータ、LUT 容量制限、プラグイン読み込みを対象とし、ネイティブホストには別途 NICE 並列テストがあります。
+単独テストは解析、数値規則、形式の混在、プロパティ、符号付き stride、メモリー境界、plan/context の寿命、並列実行、スカラーと LLVM の比較を検証します。純粋な C のテストで公開 API と内部 LUT ブリッジを確認します。AviSynthMinus のネイティブホストには別途 NICE 並列テストがあります。
 
 Clang/GCC では `IRIS_SANITIZE=ON` で ASan/UBSan を有効にできます。ビルド済みの依存ライブラリーや JIT が生成する機械語は、この計装の対象外です。
 

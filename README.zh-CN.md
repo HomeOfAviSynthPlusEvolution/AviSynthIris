@@ -61,7 +61,7 @@ add_subdirectory(third_party/iris)
 target_link_libraries(MyHost PRIVATE Iris::Iris)
 ```
 
-升级时应使用配套的头文件与库。C 接口不暴露 C++ 或 LLVM 类型，C++ 异常不会跨越接口边界。当前支持源码联合构建，不承诺稳定的独立 DLL ABI；最终链接需要 C++ 运行库。
+升级时应使用配套的头文件与库。C 接口不暴露 C++ 或 LLVM 类型，C++ 异常不会跨越接口边界。通过源码联合构建和静态链接集成；最终链接需要 C++ 运行库。
 
 公开 API 位于 [include/iris/iris.h](include/iris/iris.h)。通过 `iris_compile_v1` 或 `iris_compile_expr_v1` 编译，查询输入与属性依赖，创建执行 context，再调用 `iris_execute_v1`。版本化结构的 `struct_size` 必须设为该结构的准确 `sizeof`。plan 可以共享，同一个 context 不能并发执行。调用方负责提供有效缓冲区、有符号字节步长，以及互不重叠的输入输出存储。参见 [C 示例](examples/example.c)。
 
@@ -84,8 +84,6 @@ Windows ARM64/ARM64EC 不支持 SLEEF，这些目标需保持 `IRIS_SLEEF=OFF`�
 
 AviSynthMinus 原生适配通过内部静态 [宿主桥接](include/iris/host.h) 声明 `MT_NICE_FILTER`。它共享 plan、JIT 代码和已构建的 LUT，每次请求独立持有帧引用、属性、context 和诊断。桥接创建手动 LUT 时继承 plan 的后端选择。
 
-可选 Windows C 插件通过 `IRIS_AVS=ON` 构建，`IRIS_AVS_INCLUDE_DIR` 指向 SDK 头文件目录。启用测试时还需用 `IRIS_AVS_RUNTIME` 指定现有 AviSynth DLL 的绝对路径。插件名为 `IrisExpr.dll`，使用前通过 `LoadPlugin` 加载，再调用 `IrisExpr`。由于公共 AVS C 包装层含有可变状态，这个独立 C 插件仍声明 `MT_SERIALIZED`。
-
 ```avs
 IrisExpr(clip, "x 2 *", backend="llvm")
 IrisExpr(a, b, "x y + 0.5 *", backend="sleef")
@@ -98,7 +96,7 @@ IrisExpr(clip, "x 255 / 0.45 pow 255 *", backend="sleef-fast")
 
 ## 测试
 
-独立测试覆盖解析、数值规则、混合格式、属性、有符号步长、内存边界、plan/context 生命周期、并发执行及标量/LLVM 对照。纯 C 测试验证公开 API 和内部 LUT 桥接。可选 AVS 测试覆盖脚本行为、格式、元数据、LUT 预算和插件加载；原生宿主另有 NICE 并发测试。
+独立测试覆盖解析、数值规则、混合格式、属性、有符号步长、内存边界、plan/context 生命周期、并发执行及标量/LLVM 对照。纯 C 测试验证公开 API 和内部 LUT 桥接。AviSynthMinus 原生宿主另有 NICE 并发测试。
 
 Clang/GCC 构建可通过 `IRIS_SANITIZE=ON` 启用 ASan/UBSan；预编译依赖和 JIT 生成的机器码不在该插桩范围内。
 
