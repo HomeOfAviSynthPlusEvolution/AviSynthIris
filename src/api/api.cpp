@@ -1,7 +1,18 @@
 #include "runtime/runtime.hpp"
+#include "runtime/manual_lut.hpp"
+#include <iris/host.h>
 #include <cstdio>
 #include <cstring>
 #include <new>
+struct iris_host_lut {
+  iris::ManualLut table;
+  uint32_t width, height;
+  size_t property_count;
+  bool built = false;
+  explicit iris_host_lut(const iris_plan& plan)
+      : table(plan, plan.program->options.backend), width(plan.program->info.width), height(plan.program->info.height),
+        property_count(plan.program->info.property_count) {}
+};
 namespace {
 template <class F>
 iris_status guard(iris_diagnostic* d, F f) noexcept {
@@ -29,6 +40,55 @@ iris_status guard(iris_diagnostic* d, F f) noexcept {
 }
 } // namespace
 extern "C" {
+iris_status iris_host_lut_validate_source(const char* source, iris_diagnostic* d) {
+  return guard(d, [&] {
+    if (!source)
+      iris::fail("null LUT source");
+    iris::validate_lut_source(source);
+  });
+}
+iris_status iris_host_lut_check_budget(uint64_t bytes, int64_t max_mib, iris_diagnostic* d) {
+  return guard(d, [&] { iris::check_lut_budget(bytes, max_mib); });
+}
+iris_status iris_host_lut_create(const iris_plan* plan, iris_host_lut** out, uint64_t* bytes, iris_diagnostic* d) {
+  if (out)
+    *out = nullptr;
+  if (bytes)
+    *bytes = 0;
+  return guard(d, [&] {
+    if (!plan || !out || !bytes)
+      iris::fail("null LUT create argument");
+    auto lut = std::make_unique<iris_host_lut>(*plan);
+    *bytes = lut->table.storage_bytes();
+    *out = lut.release();
+  });
+}
+void iris_host_lut_destroy(iris_host_lut* lut) {
+  delete lut;
+}
+iris_status iris_host_lut_build(iris_host_lut* lut, const float* properties, size_t count, iris_diagnostic* d) {
+  return guard(d, [&] {
+    if (!lut || count != lut->property_count || (count && !properties))
+      iris::fail("invalid LUT build arguments");
+    std::vector<float> snapshot;
+    if (count)
+      snapshot.assign(properties, properties + count);
+    lut->table.build(snapshot);
+    lut->built = true;
+  });
+}
+iris_status iris_host_lut_apply(const iris_host_lut* lut, const iris_input_plane* inputs, iris_output_plane output,
+                                iris_diagnostic* d) {
+  return guard(d, [&] {
+    if (!lut || !lut->built || !inputs || !output.data)
+      iris::fail("invalid or unbuilt LUT");
+    for (uint32_t i = 0; i < 2; ++i)
+      if ((lut->table.input_mask() & (1u << i)) && !inputs[i].data)
+        iris::fail("missing LUT input");
+    lut->table.apply(inputs, output, lut->width, lut->height);
+  });
+}
+
 iris_status iris_compile(const char* s, const iris_compile_options* o, iris_plan** out, iris_diagnostic* d) {
   return iris_compile_ex(s, o, IRIS_BACKEND_SCALAR, 0, out, d);
 }

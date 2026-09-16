@@ -498,7 +498,8 @@ int wmain(int argc, wchar_t** argv) {
       throw std::runtime_error("cannot create AVS environment v8");
     try {
       register_iris_avs(api, env);
-      if (argc == 3) {
+      bool builtin = argc == 3 && std::wstring(argv[2]) == L"--builtin";
+      if (argc == 3 && !builtin) {
         int bytes = WideCharToMultiByte(CP_UTF8, 0, argv[2], -1, nullptr, 0, nullptr, nullptr);
         if (!bytes)
           throw std::runtime_error("plugin path encoding failed");
@@ -511,7 +512,7 @@ int wmain(int argc, wchar_t** argv) {
           throw std::runtime_error(error);
         }
         api.avs_release_value(result);
-      } else
+      } else if (!builtin)
         register_iris_expr_avs(api, env);
       if (api.avs_add_function(env, "IrisFixture", "c", fixture_create, &api) != 0)
         throw std::runtime_error("register fixture failed");
