@@ -205,6 +205,36 @@ void snapshots_and_bounds() {
   fill.build({2});
   fill.apply(nullptr, {output, 12}, 3, 1);
   require(output[0] == 6 && output[2] == 6, "property-only fill mismatch");
+  for (uint32_t bits : {8u, 10u}) {
+    for (uint32_t out_bits : {8u, 16u, 32u}) {
+      auto second_options = options(10, bits, out_bits, 1);
+      Compiled second("y", second_options);
+      iris::ManualLut selected(*second.plan, backend);
+      require(selected.input_mask() == 2, "unused first LUT axis retained");
+      selected.build({});
+      uint16_t sample = bits == 8 ? 200 : 65535;
+      unsigned char result[4]{};
+      iris_input_plane planes[] = {{nullptr, 0}, {&sample, 2}};
+      selected.apply(planes, {result, 4}, 1, 1);
+      float value = 0;
+      if (out_bits == 32)
+        std::memcpy(&value, result, 4);
+      else {
+        uint16_t integer = 0;
+        std::memcpy(&integer, result, out_bits == 8 ? 1 : 2);
+        value = integer;
+      }
+      require(value == (bits == 8 ? 200 : out_bits == 8 ? 255 : 1023), "second-only LUT clamping mismatch");
+    }
+  }
+  auto copy_options = options(10, 0, 10, 1);
+  Compiled copy("x", copy_options);
+  iris::ManualLut copy_lut(*copy.plan, backend);
+  copy_lut.build({});
+  uint16_t illegal = 65535, clamped = 0;
+  iris_input_plane plane{&illegal, 2};
+  copy_lut.apply(&plane, {&clamped, 2}, 1, 1);
+  require(clamped == 1023, "optimized x bypassed LUT index clamping");
 }
 } // namespace
 int main(int argc, char**) {

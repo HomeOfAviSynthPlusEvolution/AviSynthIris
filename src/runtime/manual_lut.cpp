@@ -4,6 +4,62 @@
 #include <string_view>
 
 namespace iris {
+namespace {
+struct Lookup {
+  const unsigned char* table;
+  std::array<size_t, 2> axes;
+  std::array<uint32_t, 2> domains;
+};
+template <size_t Bytes>
+size_t index_at(const unsigned char* row, uint32_t x, uint32_t domain, size_t axis) noexcept {
+  if constexpr (Bytes == 0)
+    return 0;
+  else if constexpr (Bytes == 1)
+    return size_t(row[x]) * axis;
+  else {
+    uint16_t value;
+    std::memcpy(&value, row + size_t(x) * 2, 2);
+    return size_t(std::min(uint32_t(value), domain - 1)) * axis;
+  }
+}
+template <size_t X, size_t Y, size_t Out>
+void lookup(const Lookup& lut, const iris_input_plane* inputs, iris_output_plane output, uint32_t width,
+            uint32_t height) noexcept {
+  for (uint32_t y = 0; y < height; ++y) {
+    auto* dst = static_cast<unsigned char*>(output.data) + ptrdiff_t(y) * output.stride;
+    const unsigned char *row_x = nullptr, *row_y = nullptr;
+    if constexpr (X != 0)
+      row_x = static_cast<const unsigned char*>(inputs[0].data) + ptrdiff_t(y) * inputs[0].stride;
+    if constexpr (Y != 0)
+      row_y = static_cast<const unsigned char*>(inputs[1].data) + ptrdiff_t(y) * inputs[1].stride;
+    for (uint32_t x = 0; x < width; ++x) {
+      size_t index =
+          index_at<X>(row_x, x, lut.domains[0], lut.axes[0]) + index_at<Y>(row_y, x, lut.domains[1], lut.axes[1]);
+      std::memcpy(dst + size_t(x) * Out, lut.table + index * Out, Out);
+    }
+  }
+}
+template <size_t X, size_t Y>
+void dispatch_output(const Lookup& lut, size_t bytes, const iris_input_plane* inputs, iris_output_plane output,
+                     uint32_t width, uint32_t height) noexcept {
+  if (bytes == 1)
+    lookup<X, Y, 1>(lut, inputs, output, width, height);
+  else if (bytes == 2)
+    lookup<X, Y, 2>(lut, inputs, output, width, height);
+  else
+    lookup<X, Y, 4>(lut, inputs, output, width, height);
+}
+template <size_t X>
+void dispatch_second(const Lookup& lut, size_t bytes, const iris_input_plane* inputs, iris_output_plane output,
+                     uint32_t width, uint32_t height) noexcept {
+  if (!lut.axes[1])
+    dispatch_output<X, 0>(lut, bytes, inputs, output, width, height);
+  else if (lut.domains[1] == 256)
+    dispatch_output<X, 1>(lut, bytes, inputs, output, width, height);
+  else
+    dispatch_output<X, 2>(lut, bytes, inputs, output, width, height);
+}
+} // namespace
 uint64_t lut_storage_bytes(uint64_t entries, uint64_t bytes) {
   if (!bytes || entries > uint64_t(PTRDIFF_MAX) / bytes || entries > uint64_t(SIZE_MAX) / bytes)
     throw Error(IRIS_LIMIT_EXCEEDED, "LUT storage size exceeds addressable capacity");
@@ -128,26 +184,12 @@ void ManualLut::build(const std::vector<float>& properties) {
 }
 void ManualLut::apply(const iris_input_plane* inputs, iris_output_plane output, uint32_t width,
                       uint32_t height) const noexcept {
-  for (uint32_t y = 0; y < height; ++y) {
-    auto* dst = static_cast<unsigned char*>(output.data) + ptrdiff_t(y) * output.stride;
-    std::array<const unsigned char*, 2> rows{};
-    for (size_t i = 0; i < 2; ++i)
-      if (axes_[i])
-        rows[i] = static_cast<const unsigned char*>(inputs[i].data) + ptrdiff_t(y) * inputs[i].stride;
-    for (uint32_t x = 0; x < width; ++x) {
-      size_t index = 0;
-      for (size_t i = 0; i < 2; ++i) {
-        if (!axes_[i])
-          continue;
-        uint16_t value = 0;
-        if (evaluation_.options.inputs[i].type == IRIS_U8)
-          value = rows[i][x];
-        else
-          std::memcpy(&value, rows[i] + size_t(x) * 2, 2);
-        index += size_t(std::min(uint32_t(value), domains_[i] - 1)) * axes_[i];
-      }
-      std::memcpy(dst + size_t(x) * sample_bytes_, table_.get() + index * sample_bytes_, sample_bytes_);
-    }
-  }
+  const Lookup lut{table_.get(), axes_, domains_};
+  if (!axes_[0])
+    dispatch_second<0>(lut, sample_bytes_, inputs, output, width, height);
+  else if (domains_[0] == 256)
+    dispatch_second<1>(lut, sample_bytes_, inputs, output, width, height);
+  else
+    dispatch_second<2>(lut, sample_bytes_, inputs, output, width, height);
 }
 } // namespace iris
