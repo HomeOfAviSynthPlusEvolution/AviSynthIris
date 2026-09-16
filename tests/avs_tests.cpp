@@ -437,6 +437,35 @@ void lut_adapter(AvsApi& api, AVS_ScriptEnvironment* env, const char* backend) {
     check_uniform(api, prefetched->clip, {1, 1, 1}, n);
   std::cout << "Manual LUT plugin snapshots, formats, aggregate budgets and diagnostics passed: " << backend << '\n';
 }
+void expr_lifecycle(AvsApi& api, AVS_ScriptEnvironment* env, const char* backend) {
+  std::string suffix = std::string(",backend=\"") + backend + "\")";
+  std::string source = "Expr(BlankClip(width=18,height=10,length=64,pixel_type=\"YV12\"),\"7\")";
+  auto survivor = script_clip(api, env, "IrisExpr(" + source + ",\"x 3 * frameno +\"" + suffix);
+  for (int iteration = 0; iteration < 16; ++iteration) {
+    // Fail after an earlier plane has compiled, then construct and destroy both
+    // normal and LUT filters while an independent JIT filter remains alive.
+    auto failed = api.avs_invoke(
+        env, "Eval", make_avs_string(("IrisExpr(" + source + ",\"x 2 *\",\"x +\"" + suffix).c_str()), nullptr);
+    bool rejected = avs_is_error(failed);
+    api.avs_release_value(failed);
+    if (!rejected)
+      throw std::runtime_error("lifecycle malformed second plane was accepted");
+    {
+      auto compute = script_clip(api, env, "IrisExpr(" + source + ",\"x 2 * frameno +\"" + suffix);
+      auto table = script_clip(api, env, "IrisExpr(" + source + "," + source + ",\"x y + 3 +\",lut=2" + suffix);
+      for (int n : {iteration + 2, iteration, iteration + 1}) {
+        check_uniform(api, compute->clip, {float(14 + n), float(14 + n), float(14 + n)}, n);
+        check_uniform(api, table->clip, {17, 17, 17}, n);
+      }
+      // Release ordinary JIT state before the table, then use the table again.
+      compute.reset();
+      check_uniform(api, table->clip, {17, 17, 17}, iteration + 3);
+    }
+    check_uniform(api, survivor->clip, {float(21 + iteration), float(21 + iteration), float(21 + iteration)},
+                  iteration);
+  }
+  std::cout << "AVS partial construction recovery and repeated JIT/LUT lifetime checks passed: " << backend << '\n';
+}
 } // namespace
 int wmain(int argc, wchar_t** argv) {
   try {
@@ -474,12 +503,14 @@ int wmain(int argc, wchar_t** argv) {
       test(api, env, "scalar", true);
       expr_adapter(api, env, "scalar");
       lut_adapter(api, env, "scalar");
+      expr_lifecycle(api, env, "scalar");
 #ifdef IRIS_TEST_LLVM
       property_contract(api, env, "llvm");
       test(api, env, "llvm", false);
       test(api, env, "llvm", true);
       expr_adapter(api, env, "llvm");
       lut_adapter(api, env, "llvm");
+      expr_lifecycle(api, env, "llvm");
 #endif
     } catch (...) {
       api.avs_delete_script_environment(env);
