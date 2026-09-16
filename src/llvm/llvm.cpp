@@ -6,6 +6,7 @@
 #include <llvm-c/Transforms/PassBuilder.h>
 #include <cstring>
 #include <limits>
+#include <map>
 #include <mutex>
 
 namespace iris {
@@ -33,7 +34,9 @@ struct Module {
   LLVMOrcThreadSafeContextRef thread_context = LLVMOrcCreateNewThreadSafeContextFromLLVMContext(context);
   LLVMModuleRef module = LLVMModuleCreateWithNameInContext("iris", context);
   LLVMBuilderRef builder = LLVMCreateBuilderInContext(context);
+  LLVMBuilderRef parameter_builder = LLVMCreateBuilderInContext(context);
   ~Module() {
+    LLVMDisposeBuilder(parameter_builder);
     LLVMDisposeBuilder(builder);
     if (module)
       LLVMDisposeModule(module);
@@ -47,6 +50,8 @@ struct Lowering {
   LLVMBuilderRef b;
   LLVMTypeRef f32, i1, i8, i16, i32, i64, iptr, ptr;
   LLVMValueRef args = nullptr, y = nullptr, x = nullptr;
+  LLVMBasicBlockRef entry = nullptr;
+  std::map<size_t, LLVMValueRef> fields;
   explicit Lowering(Module& module) : m(module), b(m.builder) {
     f32 = LLVMFloatTypeInContext(m.context);
     i1 = LLVMInt1TypeInContext(m.context);
@@ -65,7 +70,21 @@ struct Lowering {
     LLVMSetAlignment(v, 1);
     return v;
   }
-  LLVMValueRef field(LLVMTypeRef type, size_t offset) { return load(type, gep(args, integer(int64_t(offset)))); }
+  LLVMValueRef field(LLVMTypeRef type, size_t offset) {
+    auto found = fields.find(offset);
+    if (found != fields.end())
+      return found->second;
+    // ExecuteArgs is a private immutable snapshot, independent of pixel buffers.
+    // Load its fields once per row, before stores can inhibit LLVM's alias analysis.
+    auto builder = m.parameter_builder;
+    LLVMPositionBuilderBefore(builder, LLVMGetBasicBlockTerminator(entry));
+    auto index = integer(int64_t(offset));
+    auto address = LLVMBuildGEP2(builder, i8, args, &index, 1, "");
+    auto value = LLVMBuildLoad2(builder, type, address, "");
+    LLVMSetAlignment(value, 1);
+    fields.emplace(offset, value);
+    return value;
+  }
   LLVMValueRef cmp(LLVMRealPredicate op, LLVMValueRef a, LLVMValueRef c) { return LLVMBuildFCmp(b, op, a, c, ""); }
   LLVMValueRef select(LLVMValueRef cond, LLVMValueRef a, LLVMValueRef c) { return LLVMBuildSelect(b, cond, a, c, ""); }
   LLVMValueRef clamp_coord(LLVMValueRef coord, int32_t offset, uint32_t limit) {
@@ -134,7 +153,7 @@ struct Lowering {
     auto fn = LLVMAddFunction(m.module, "iris_row", LLVMFunctionType(LLVMVoidTypeInContext(m.context), params, 2, 0));
     LLVMAddAttributeAtIndex(fn, LLVMAttributeFunctionIndex,
                             LLVMCreateEnumAttribute(m.context, LLVMGetEnumAttributeKindForName("nounwind", 8), 0));
-    auto entry = LLVMAppendBasicBlockInContext(m.context, fn, "entry");
+    entry = LLVMAppendBasicBlockInContext(m.context, fn, "entry");
     auto loop = LLVMAppendBasicBlockInContext(m.context, fn, "pixels");
     auto done = LLVMAppendBasicBlockInContext(m.context, fn, "done");
     LLVMPositionBuilderAtEnd(b, entry);
