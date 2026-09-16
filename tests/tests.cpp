@@ -496,7 +496,7 @@ void strategies_and_allocation() {
 }
 void layout() {
   for (bool negative : {false, true})
-    for (uint32_t width : {1u, 3u, 7u, 15u, 16u, 17u, 31u}) {
+    for (uint32_t width : {1u, 2u, 3u, 7u, 15u, 16u, 17u, 31u, 65u}) {
       const uint32_t h = 3;
       const ptrdiff_t pitch = ptrdiff_t(width * 2 + 5), opitch = ptrdiff_t(width * 4 + 7);
       std::vector<uint8_t> in(size_t(pitch) * h + 8, 0xa5), out(size_t(opitch) * h + 8, 0xcd);
@@ -984,7 +984,7 @@ void guard_pages() {
     }
   };
   for (bool end : {false, true})
-    for (unsigned w : {1u, 3u, 7u, 15u, 16u, 17u, 31u})
+    for (unsigned w : {1u, 2u, 3u, 7u, 15u, 16u, 17u, 31u, 65u})
       for (auto format : {iris_format{IRIS_U8, 8}, iris_format{IRIS_U16, 16}, iris_format{IRIS_F32, 32}}) {
         size_t bytes = iris::sample_bytes(format);
         Guarded in(w * bytes, end), out(w * 4, end);
@@ -1012,6 +1012,34 @@ void guard_pages() {
         }
       }
 #endif
+}
+void neighbor_regions() {
+  for (int optimize : {0, 1})
+    for (unsigned width : {1u, 2u, 3u, 16u, 17u, 65u})
+      for (auto offsets : {std::pair{-2, 3}, std::pair{0, 3}, std::pair{-3, 0}, std::pair{-2147483647, 2147483647}}) {
+        auto o = options(width, 2, optimize);
+        o.inputs[0] = {IRIS_U16, 16};
+        std::vector<uint16_t> first(width * 2);
+        std::vector<float> second(width * 2), output(width * 2);
+        for (unsigned i = 0; i < width * 2; ++i) {
+          first[i] = uint16_t(i * 3);
+          second[i] = float(i * 7);
+        }
+        const auto expression =
+            "x[" + std::to_string(offsets.first) + ",-1] y[" + std::to_string(offsets.second) + ",1] + sx + sy +";
+        Compiled p(expression, o);
+        iris_execute_args args{};
+        args.inputs[0] = {first.data(), ptrdiff_t(width * 2)};
+        args.inputs[1] = {second.data(), ptrdiff_t(width * 4)};
+        args.output = {output.data(), ptrdiff_t(width * 4)};
+        CHECK(iris_execute(p.p, p.c, &args, nullptr) == IRIS_OK);
+        for (unsigned y = 0; y < 2; ++y)
+          for (unsigned x = 0; x < width; ++x) {
+            auto left = std::clamp(int64_t(x) + offsets.first, int64_t(0), int64_t(width - 1));
+            auto right = std::clamp(int64_t(x) + offsets.second, int64_t(0), int64_t(width - 1));
+            CHECK(output[y * width + x] == first[size_t(left)] + second[width + size_t(right)] + x + y);
+          }
+      }
 }
 void normalized_coordinates() {
   for (int optimize : {0, 1})
@@ -1125,6 +1153,7 @@ int main(int argc, char** argv) {
     frontend_independence();
     lut_tables();
     guard_pages();
+    neighbor_regions();
     extended_execution();
     normalized_coordinates();
     std::cout << "All Iris checks passed (250 expressions x 15 differential inputs; 8 threads x 200 calls; guard "

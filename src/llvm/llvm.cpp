@@ -75,6 +75,7 @@ struct Lowering {
   std::map<size_t, LLVMValueRef> fields;
   LLVMOrcLLJITRef jit;
   bool vector_math;
+  bool interior = false;
   std::vector<LLVMValueRef> vector_functions;
   void symbol(const std::string& name, uintptr_t address) {
     LLVMOrcCSymbolMapPair pair{};
@@ -140,7 +141,8 @@ struct Lowering {
     auto stride = field(iptr, offset + offsetof(iris_input_plane, stride));
     if (sizeof(ptrdiff_t) != 8)
       stride = LLVMBuildSExt(b, stride, i64, "");
-    auto xx = clamp_coord(x, n.dx, p.options.width), yy = clamp_coord(y, n.dy, p.options.height);
+    auto xx = interior ? LLVMBuildAdd(b, x, integer(n.dx), "") : clamp_coord(x, n.dx, p.options.width);
+    auto yy = clamp_coord(y, n.dy, p.options.height);
     const auto format = p.options.inputs[n.input];
     auto address = gep(base, LLVMBuildAdd(b, LLVMBuildMul(b, yy, stride, ""),
                                           LLVMBuildMul(b, xx, integer(sample_bytes(format)), ""), ""));
@@ -222,22 +224,18 @@ struct Lowering {
     }
     LLVMSetAlignment(LLVMBuildStore(b, value, gep(base, offset)), 1);
   }
-  void lower(const Program& p) {
-    LLVMTypeRef params[] = {ptr, i32};
-    auto fn = LLVMAddFunction(m.module, "iris_row", LLVMFunctionType(LLVMVoidTypeInContext(m.context), params, 2, 0));
-    LLVMAddAttributeAtIndex(fn, LLVMAttributeFunctionIndex,
-                            LLVMCreateEnumAttribute(m.context, LLVMGetEnumAttributeKindForName("nounwind", 8), 0));
-    entry = LLVMAppendBasicBlockInContext(m.context, fn, "entry");
-    auto loop = LLVMAppendBasicBlockInContext(m.context, fn, "pixels");
-    auto done = LLVMAppendBasicBlockInContext(m.context, fn, "done");
-    LLVMPositionBuilderAtEnd(b, entry);
-    args = LLVMGetParam(fn, 0);
-    y = LLVMBuildZExt(b, LLVMGetParam(fn, 1), i64, "");
+  void lower_loop(const Program& p, LLVMValueRef fn, uint32_t begin, uint32_t end, bool unclamped) {
+    if (begin == end)
+      return;
+    interior = unclamped;
+    auto previous = LLVMGetInsertBlock(b);
+    auto loop = LLVMAppendBasicBlockInContext(m.context, fn, unclamped ? "interior" : "boundary");
+    auto done = LLVMAppendBasicBlockInContext(m.context, fn, "region.done");
     LLVMBuildBr(b, loop);
     LLVMPositionBuilderAtEnd(b, loop);
     x = LLVMBuildPhi(b, i64, "x");
-    auto zero = integer(0);
-    LLVMAddIncoming(x, &zero, &entry, 1);
+    auto first = integer(begin);
+    LLVMAddIncoming(x, &first, &previous, 1);
     std::vector<LLVMValueRef> values;
     for (const auto& n : p.ir.nodes) {
       LLVMValueRef a = nullptr, c = nullptr, d = nullptr, v = nullptr;
@@ -386,8 +384,32 @@ struct Lowering {
     output(values[p.ir.result], p);
     auto next = LLVMBuildAdd(b, x, integer(1), "");
     LLVMAddIncoming(x, &next, &loop, 1);
-    LLVMBuildCondBr(b, LLVMBuildICmp(b, LLVMIntULT, next, integer(p.options.width), ""), loop, done);
+    LLVMBuildCondBr(b, LLVMBuildICmp(b, LLVMIntULT, next, integer(end), ""), loop, done);
     LLVMPositionBuilderAtEnd(b, done);
+  }
+  void lower(const Program& p) {
+    LLVMTypeRef params[] = {ptr, i32};
+    auto fn = LLVMAddFunction(m.module, "iris_row", LLVMFunctionType(LLVMVoidTypeInContext(m.context), params, 2, 0));
+    LLVMAddAttributeAtIndex(fn, LLVMAttributeFunctionIndex,
+                            LLVMCreateEnumAttribute(m.context, LLVMGetEnumAttributeKindForName("nounwind", 8), 0));
+    entry = LLVMAppendBasicBlockInContext(m.context, fn, "entry");
+    LLVMPositionBuilderAtEnd(b, entry);
+    args = LLVMGetParam(fn, 0);
+    y = LLVMBuildZExt(b, LLVMGetParam(fn, 1), i64, "");
+    int64_t begin = 0, end = p.options.width;
+    for (const auto& node : p.ir.nodes)
+      if (node.op == Op::Input) {
+        begin = std::max(begin, -int64_t(node.dx));
+        end = std::min(end, int64_t(p.options.width) - node.dx);
+      }
+    if (begin < end) {
+      lower_loop(p, fn, 0, uint32_t(begin), false);
+      lower_loop(p, fn, uint32_t(begin), uint32_t(end), true);
+      lower_loop(p, fn, uint32_t(end), p.options.width, false);
+    } else {
+      // Large offsets or short rows may leave no common unclamped interval.
+      lower_loop(p, fn, 0, p.options.width, false);
+    }
     LLVMBuildRetVoid(b);
     // The vector declarations are referenced by VFABI string attributes only.
     // Keep them through early GlobalDCE so the loop vectorizer can find them.

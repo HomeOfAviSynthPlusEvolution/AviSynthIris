@@ -1,4 +1,6 @@
 #include "avs_host.hpp"
+#include <iris/iris.h>
+#include <cmath>
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
@@ -14,6 +16,13 @@ struct Fixture {
   AvsApi& api;
   uint64_t calls = 0;
   bool random = false;
+  bool fixed = false;
+  avs_copy_video_frame_func copy = nullptr;
+  std::unique_ptr<AvsFrame> cached[2];
+  void clear() {
+    cached[0].reset();
+    cached[1].reset();
+  }
 };
 uint32_t sample(int x, int y, int n, int seed, int bits, bool random) {
   uint32_t value = uint32_t(x) + uint32_t(y) * 17u + uint32_t(n) * 13u + uint32_t(seed) * 97u;
@@ -30,6 +39,11 @@ AVS_VideoFrame* AVSC_CC fixture_frame(AVS_FilterInfo* fi, int n) {
   auto& fixture = *static_cast<Fixture*>(fi->user_data);
   auto& api = fixture.api;
   ++fixture.calls;
+  int seed = fi->vi.num_frames & 1;
+  if (fixture.fixed && fixture.cached[seed])
+    return fixture.copy(fixture.cached[seed]->frame);
+  if (fixture.fixed)
+    n = 0;
   AvsFrame frame(api, api.avs_new_video_frame_a(fi->env, &fi->vi, 64));
   if (!frame.frame) {
     fi->error = "benchmark source allocation failed";
@@ -40,12 +54,15 @@ AVS_VideoFrame* AVSC_CC fixture_frame(AVS_FilterInfo* fi, int n) {
   auto* data = api.avs_get_write_ptr_p(frame.frame, AVS_PLANAR_Y);
   auto pitch = api.avs_get_pitch_p(frame.frame, AVS_PLANAR_Y);
   // The two sources use different frame counts as a fixed seed.
-  int seed = fi->vi.num_frames & 1;
   for (int y = 0; y < fi->vi.height; ++y)
     for (int x = 0; x < fi->vi.width; ++x) {
       uint16_t value = uint16_t(sample(x, y, n, seed, bits, fixture.random));
       std::memcpy(data + ptrdiff_t(y) * pitch + x * bytes, &value, size_t(bytes));
     }
+  if (fixture.fixed) {
+    fixture.cached[seed] = std::make_unique<AvsFrame>(api, frame.release());
+    return fixture.copy(fixture.cached[seed]->frame);
+  }
   return frame.release();
 }
 AVS_Value AVSC_CC fixture_create(AVS_ScriptEnvironment* env, AVS_Value args, void* user) {
@@ -81,7 +98,7 @@ std::unique_ptr<AvsClip> eval(AvsApi& api, AVS_ScriptEnvironment* env, const std
 double elapsed(Clock::time_point start) {
   return std::chrono::duration<double, std::milli>(Clock::now() - start).count();
 }
-uint64_t read_frame(AvsApi& api, AVS_Clip* clip, int n, int bits, bool random, int formula, bool verify) {
+uint64_t read_frame(AvsApi& api, AVS_Clip* clip, int n, int bits, bool random, int formula, bool verify, bool fixed) {
   AvsFrame frame(api, api.avs_get_frame(clip, n));
   if (!frame.frame) {
     auto* error = api.avs_clip_get_error(clip);
@@ -100,9 +117,42 @@ uint64_t read_frame(AvsApi& api, AVS_Clip* clip, int n, int bits, bool random, i
     uint16_t actual = 0;
     std::memcpy(&actual, data + ptrdiff_t(y) * pitch + x * bytes, size_t(bytes));
     if (verify) {
-      auto a = sample(x, y, n, 0, bits, random), b = sample(x, y, n, 1, bits, random);
-      auto expected = formula == 0 ? (a + b + 1) / 2 : std::max(a, b) / 2;
-      if (actual != expected)
+      int input_frame = fixed ? 0 : n;
+      auto a = sample(x, y, input_frame, 0, bits, random), b = sample(x, y, input_frame, 1, bits, random);
+      double maximum = double((1u << bits) - 1);
+      double value = 0;
+      switch (formula) {
+        case 0:
+          value = (a + b + 1) / 2;
+          break;
+        case 1:
+          value = std::max(a, b) / 2;
+          break;
+        case 2:
+          value = a * .75 + b * .25;
+          break;
+        case 3:
+          value = std::abs(double(a) - b) > 16 ? maximum : 0;
+          break;
+        case 4:
+          value = a > b ? a : b;
+          break;
+        case 5:
+          value = double(a) + (double(a) - b) * .5;
+          break;
+        case 6:
+          value = (std::pow(a / maximum, .454545) * maximum + b) * .5;
+          break;
+        case 7:
+          value = (double(sample(std::max(x - 1, 0), y, input_frame, 0, bits, random)) + a +
+                   sample(std::min(x + 1, width - 1), y, input_frame, 0, bits, random) + b) *
+                  .25;
+          break;
+        default:
+          throw std::runtime_error("invalid benchmark formula");
+      }
+      auto expected = uint32_t(std::floor(std::clamp(value, 0.0, maximum) + .5));
+      if (std::abs(int(actual) - int(expected)) > (formula >= 2 ? 1 : 0))
         throw std::runtime_error("benchmark pixel mismatch at frame " + std::to_string(n) + ": expected " +
                                  std::to_string(expected) + " got " + std::to_string(actual));
     }
@@ -110,24 +160,45 @@ uint64_t read_frame(AvsApi& api, AVS_Clip* clip, int n, int bits, bool random, i
   }
   return checksum;
 }
-void run(AvsApi& api, AVS_ScriptEnvironment* env, Fixture& fixture, bool quick) {
-  int width = quick ? 257 : 1280, height = quick ? 17 : 720;
-  const char* formulas[] = {"x y + 0.5 * 0.25 +", "x y - abs x y min + x y max + 0.25 * floor"};
+void run(AvsApi& api, AVS_ScriptEnvironment* env, Fixture& fixture, bool quick, bool common, int selected_formula) {
+  int width = quick ? 257 : (common ? 1920 : 1280), height = quick ? 17 : (common ? 1080 : 720);
+  const char* formulas[] = {"x y + 0.5 * 0.25 +",
+                            "x y - abs x y min + x y max + 0.25 * floor",
+                            "x 0.75 * y 0.25 * +",
+                            "x y - abs 16 > range_max 0 ?",
+                            "x y > x y ?",
+                            "x x y - 0.5 * + 0 range_max clip",
+                            "x range_max / 0.454545 pow range_max * y + 0.5 *",
+                            "x[-1,0] x + x[1,0] + y + 0.25 *"};
   std::vector<std::string> modes = {"source_pair", "original_default", "original_lut", "iris_scalar", "iris_lut"};
 #ifdef IRIS_TEST_LLVM
   modes.push_back("iris_llvm");
 #endif
+  if (common) {
+    modes = {"source_pair", "original_default", "iris_scalar"};
+    if (iris_backend_available(IRIS_BACKEND_LLVM))
+      modes.push_back("iris_llvm");
+    if (iris_backend_available(IRIS_BACKEND_SLEEF))
+      modes.push_back("iris_sleef");
+    if (iris_backend_available(IRIS_BACKEND_SLEEF_FAST))
+      modes.push_back("iris_sleef-fast");
+  }
   std::cout << "bits,pattern,formula,mode,width,height,create_ms,first_frame_ms,min_ms,median_ms,max_ms,frames,source_"
                "calls,checksum\n";
-  for (int bits : {8, 10, 12})
+  for (int bits : {8, 10, common ? 16 : 12})
     for (bool random : {false, true}) {
+      fixture.clear();
       fixture.random = random;
       std::string base = "IrisBenchSource(BlankClip(width=" + std::to_string(width) +
                          ",height=" + std::to_string(height) + ",pixel_type=\"Y" + std::to_string(bits) + "\",length=";
-      auto a = eval(api, env, "global bench_a=" + base + "1000000))\nreturn bench_a");
-      auto b = eval(api, env, "global bench_b=" + base + "1000001))\nreturn bench_b");
+      auto a = eval(api, env, "global bench_a=" + base + "100000000))\nreturn bench_a");
+      auto b = eval(api, env, "global bench_b=" + base + "100000001))\nreturn bench_b");
       int next_frame = 0;
-      for (int formula = 0; formula < 2; ++formula)
+      for (int formula = selected_formula >= 0 ? selected_formula : 0;
+           formula < (selected_formula >= 0 ? selected_formula + 1
+                      : common              ? 8
+                                            : 2);
+           ++formula)
         for (const auto& mode : modes) {
           bool source = mode == "source_pair", original = mode.find("original") == 0;
           auto start = Clock::now();
@@ -138,7 +209,7 @@ void run(AvsApi& api, AVS_ScriptEnvironment* env, Fixture& fixture, bool quick) 
             if (original)
               script += mode == "original_lut" ? ",lut=2" : ",lut=0";
             else
-              script += std::string(",backend=\"") + (mode == "iris_llvm" ? "llvm" : "scalar") +
+              script += std::string(",backend=\"") + (mode == "iris_lut" ? "scalar" : mode.substr(5)) +
                         "\",lut=" + (mode == "iris_lut" ? "2" : "0");
             out = eval(api, env, script + ")");
           }
@@ -146,14 +217,14 @@ void run(AvsApi& api, AVS_ScriptEnvironment* env, Fixture& fixture, bool quick) 
           auto calls_before = fixture.calls;
           uint64_t checksum = 0, frames = 0;
           auto get = [&](bool verify) {
-            if (next_frame >= 1000000)
+            if (next_frame >= 100000000)
               throw std::runtime_error("benchmark exhausted distinct frame numbers");
             int n = next_frame++;
             if (source) {
-              checksum += read_frame(api, a->clip, n, bits, random, formula, false);
-              checksum += read_frame(api, b->clip, n, bits, random, formula, false);
+              checksum += read_frame(api, a->clip, n, bits, random, formula, false, fixture.fixed);
+              checksum += read_frame(api, b->clip, n, bits, random, formula, false, fixture.fixed);
             } else {
-              checksum += read_frame(api, out->clip, n, bits, random, formula, verify);
+              checksum += read_frame(api, out->clip, n, bits, random, formula, verify, fixture.fixed);
             }
             ++frames;
           };
@@ -185,13 +256,33 @@ void run(AvsApi& api, AVS_ScriptEnvironment* env, Fixture& fixture, bool quick) 
 } // namespace
 int wmain(int argc, wchar_t** argv) {
   try {
-    if (argc != 3 && !(argc == 4 && std::wstring(argv[3]) == L"--quick"))
-      throw std::runtime_error("usage: iris_avs_benchmark <avisynth.dll> <IrisExpr.dll> [--quick]");
+    if (argc < 3)
+      throw std::runtime_error("usage: iris_avs_benchmark <avisynth.dll> <IrisExpr.dll> [--quick] [--common] "
+                               "[--fixed-source] [--gamma-only] [--neighbor-only]");
+    bool quick = false, common = false, fixed = false;
+    int selected_formula = -1;
+    for (int i = 3; i < argc; ++i) {
+      if (std::wstring(argv[i]) == L"--quick")
+        quick = true;
+      else if (std::wstring(argv[i]) == L"--common")
+        common = true;
+      else if (std::wstring(argv[i]) == L"--gamma-only" || std::wstring(argv[i]) == L"--neighbor-only") {
+        selected_formula = std::wstring(argv[i]) == L"--gamma-only" ? 6 : 7;
+        common = true;
+      } else if (std::wstring(argv[i]) == L"--fixed-source")
+        fixed = true;
+      else
+        throw std::runtime_error("unknown benchmark option");
+    }
     AvsApi api(argv[1]);
     auto* env = api.avs_create_script_environment(8);
     if (!env)
       throw std::runtime_error("cannot create AVS environment");
     Fixture fixture{api};
+    fixture.fixed = fixed;
+    fixture.copy = reinterpret_cast<avs_copy_video_frame_func>(GetProcAddress(api.handle, "avs_copy_video_frame"));
+    if (!fixture.copy)
+      throw std::runtime_error("missing frame reference API");
     try {
       int length = WideCharToMultiByte(CP_UTF8, 0, argv[2], -1, nullptr, 0, nullptr, nullptr);
       if (!length)
@@ -202,11 +293,13 @@ int wmain(int argc, wchar_t** argv) {
       if (api.avs_add_function(env, "IrisBenchSource", "c", fixture_create, &fixture))
         throw std::runtime_error("benchmark source registration failed");
       std::cout << std::fixed << std::setprecision(6);
-      run(api, env, fixture, argc == 4);
+      run(api, env, fixture, quick, common, selected_formula);
     } catch (...) {
+      fixture.clear();
       api.avs_delete_script_environment(env);
       throw;
     }
+    fixture.clear();
     api.avs_delete_script_environment(env);
     return 0;
   } catch (const std::exception& e) {
