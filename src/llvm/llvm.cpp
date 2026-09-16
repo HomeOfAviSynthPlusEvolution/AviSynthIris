@@ -3,6 +3,7 @@
 #include <llvm-c/Core.h>
 #include <llvm-c/LLJIT.h>
 #include <llvm-c/Target.h>
+#include <llvm-c/TargetMachine.h>
 #include <llvm-c/Transforms/PassBuilder.h>
 #include <cstring>
 #include <limits>
@@ -42,6 +43,26 @@ struct Module {
       LLVMDisposeModule(module);
     LLVMOrcDisposeThreadSafeContext(thread_context);
   }
+};
+struct NativeTarget {
+  std::unique_ptr<char, decltype(&LLVMDisposeMessage)> cpu{LLVMGetHostCPUName(), LLVMDisposeMessage};
+  std::unique_ptr<char, decltype(&LLVMDisposeMessage)> features{LLVMGetHostCPUFeatures(), LLVMDisposeMessage};
+  LLVMTargetMachineRef machine = nullptr;
+  explicit NativeTarget(const char* triple) {
+    LLVMTargetRef target = nullptr;
+    char* error = nullptr;
+    if (LLVMGetTargetFromTriple(triple, &target, &error)) {
+      std::unique_ptr<char, decltype(&LLVMDisposeMessage)> message(error, LLVMDisposeMessage);
+      throw Error(IRIS_BACKEND_ERROR, message ? message.get() : "LLVM target lookup failed");
+    }
+    LLVMDisposeMessage(error);
+    machine = LLVMCreateTargetMachine(target, triple, cpu.get(), features.get(), LLVMCodeGenLevelDefault,
+                                      LLVMRelocDefault, LLVMCodeModelJITDefault);
+    if (!machine)
+      throw Error(IRIS_BACKEND_ERROR, "LLVM native target machine creation failed");
+  }
+  ~NativeTarget() { LLVMDisposeTargetMachine(machine); }
+  NativeTarget(const NativeTarget&) = delete;
 };
 // Byte offsets keep the generated private call ABI identical to the host ABI.
 // LLVM types never model public C structure padding by assumption.
@@ -330,10 +351,18 @@ std::shared_ptr<const JitCode> compile_llvm(const Program& p) {
   auto code = std::make_shared<Code>();
   check(LLVMOrcCreateLLJIT(&code->jit, nullptr));
   Module m;
+  NativeTarget target(LLVMOrcLLJITGetTripleString(code->jit));
   LLVMSetTarget(m.module, LLVMOrcLLJITGetTripleString(code->jit));
   LLVMSetDataLayout(m.module, LLVMOrcLLJITGetDataLayoutStr(code->jit));
   Lowering lowering(m);
   lowering.lower(p);
+  auto row = LLVMGetNamedFunction(m.module, "iris_row");
+  for (const auto& attribute :
+       {std::make_pair("target-cpu", target.cpu.get()), std::make_pair("target-features", target.features.get())})
+    LLVMAddAttributeAtIndex(row, LLVMAttributeFunctionIndex,
+                            LLVMCreateStringAttribute(m.context, attribute.first,
+                                                      unsigned(std::strlen(attribute.first)), attribute.second,
+                                                      unsigned(std::strlen(attribute.second))));
   char* message = nullptr;
   if (LLVMVerifyModule(m.module, LLVMReturnStatusAction, &message)) {
     std::unique_ptr<char, decltype(&LLVMDisposeMessage)> text(message, LLVMDisposeMessage);
@@ -341,7 +370,7 @@ std::shared_ptr<const JitCode> compile_llvm(const Program& p) {
   }
   LLVMDisposeMessage(message);
   auto passes = LLVMCreatePassBuilderOptions();
-  auto error = LLVMRunPasses(m.module, "default<O2>", nullptr, passes);
+  auto error = LLVMRunPasses(m.module, "default<O2>", target.machine, passes);
   LLVMDisposePassBuilderOptions(passes);
   check(error);
   auto module = LLVMOrcCreateNewThreadSafeModule(m.module, m.thread_context);
