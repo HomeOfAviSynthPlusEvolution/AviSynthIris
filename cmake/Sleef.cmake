@@ -1,5 +1,26 @@
+function(iris_check_sleef_platform)
+  if(WIN32)
+    # Inspect the compiler target, not the host CPU or generator spelling.
+    # This also covers ARM64EC and cross-compilation from an x64 host.
+    include(CheckCSourceCompiles)
+    set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+    check_c_source_compiles("
+      #if !defined(_M_ARM64) && !defined(_M_ARM64EC) && !defined(__aarch64__) && !defined(__arm64__)
+      #error Not an ARM64 target
+      #endif
+      int main(void) { return 0; }
+    " IRIS_SLEEF_WINDOWS_ARM64)
+    if(IRIS_SLEEF_WINDOWS_ARM64)
+      message(FATAL_ERROR
+        "SLEEF is not supported on Windows ARM64/ARM64EC. Set IRIS_SLEEF=OFF; "
+        "the scalar and LLVM backends do not require SLEEF")
+    endif()
+  endif()
+endfunction()
+
 # Keep dependency options local so embedding Iris does not change its host's defaults.
 function(iris_link_sleef)
+  iris_check_sleef_platform()
   if(IRIS_SLEEF_INCLUDE_DIR OR IRIS_SLEEF_LIBRARY)
     if(NOT EXISTS "${IRIS_SLEEF_INCLUDE_DIR}/sleef.h" OR NOT EXISTS "${IRIS_SLEEF_LIBRARY}")
       message(FATAL_ERROR
