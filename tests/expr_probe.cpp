@@ -1,6 +1,7 @@
 #include "avs_host.hpp"
 #include <iris/iris.h>
 #include <array>
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <iomanip>
@@ -142,10 +143,72 @@ void report(const char* path, const char* expression, const std::vector<float>& 
     }
   }
 }
+// Parsing observations are deliberately separate from the special-value oracle.
+void parsing_probe(AvsApi& api, AVS_ScriptEnvironment* env) {
+  const char* expressions[] = {"1e-50",
+                               "-1e-50",
+                               "1e-46",
+                               "7e-46",
+                               "8e-46",
+                               "1.401298464324817e-45",
+                               "1.1754943508222875e-38",
+                               "3.4028234663852886e38",
+                               "3.402824e38",
+                               "1e9999",
+                               "0e-9999",
+                               "1e+",
+                               "1.5tail",
+                               "0x1.8p0",
+                               "0x10",
+                               "0x-10",
+                               "-0X1.8P+1",
+                               "+0x.8p1",
+                               "0x1p-149",
+                               "0x1.fffffep127",
+                               "-0x0p0",
+                               "0x1p-150",
+                               "nan",
+                               "inf",
+                               "+.5",
+                               "1.",
+                               "2 dup+0 +",
+                               "2 dup-0 +",
+                               "2 dup0tail +",
+                               "2 dup_name@ dup_name +",
+                               "2 3 swap+1 -",
+                               "2 3 swap1tail -",
+                               "2 3 swap0 -",
+                               "2 A@ 3 A@ + A +",
+                               "2 A^ A",
+                               "2 sqrt@",
+                               "2 x@",
+                               "2 dup0@",
+                               "x[+0,-0]",
+                               "x[0,0]tail",
+                               "x[17,0]",
+                               "x[-2147483648,0]",
+                               "1 2",
+                               "1 +",
+                               "1,5"};
+  std::cout << "parser_path\texpression\tstatus\tfirst_result_bits\n";
+  for (const char* expression : expressions) {
+    auto observe = [&](const char* name, auto evaluate) {
+      try {
+        const auto values = evaluate();
+        std::cout << name << '\t' << expression << "\tok\t" << std::hex << bits(values.front()) << std::dec << '\n';
+      } catch (const std::exception&) {
+        std::cout << name << '\t' << expression << "\trejected\t-\n";
+      }
+    };
+    observe("avs-parser", [&] { return legacy(api, env, expression, "optAvx2=false,optSSE2=false,optVectorC=false"); });
+    observe("iris-parser", [&] { return current(expression, IRIS_BACKEND_SCALAR, 0); });
+  }
+}
 void run(AvsApi& api, AVS_ScriptEnvironment* env) {
   Fixture x{api, xs}, y{api, ys};
   if (api.avs_add_function(env, "ProbeX", "c", create, &x) || api.avs_add_function(env, "ProbeY", "c", create, &y))
     throw std::runtime_error("probe registration failed");
+  parsing_probe(api, env);
   auto cpu = reinterpret_cast<avs_get_cpu_flags_func>(GetProcAddress(api.handle, "avs_get_cpu_flags"));
   if (!cpu)
     throw std::runtime_error("missing CPU capability query");
@@ -159,6 +222,45 @@ void run(AvsApi& api, AVS_ScriptEnvironment* env) {
                         {"avs-sse2-request", "optAvx2=false,optSSE2=true,optVectorC=false", AVS_CPU_SSE2},
                         {"avs-avx2-request", "optAvx2=true,optSSE2=true,optVectorC=false", AVS_CPUF_AVX2}};
   std::cout << "path\texpression\trow\tcolumn\tx_bits\ty_bits\tresult_bits\tvs_iris_scalar_opt0\n";
+  // Finite expressions cover parser operations and their compositions in the
+  // actual legacy engines. Existing unit tests provide independent oracles.
+  const char* corpus[] = {
+      "x y +",          "x y -",         "x y *",         "x y /",        "x y %",         "x y min",      "x y max",
+      "x abs",          "x neg",         "x sgn",         "x sqrt",       "x exp",         "x log",        "x 2 pow",
+      "x 2 ^",          "x sin",         "x cos",         "x tan",        "x 0.1 * asin",  "x 0.1 * acos", "x atan",
+      "x y atan2",      "x 0.3 * round", "x 0.3 * floor", "x 0.3 * ceil", "x 0.3 * trunc", "x 1 3 clip",   "x y <",
+      "x y <=",         "x y >",         "x y >=",        "x y =",        "x y ==",        "x y !=",       "x y and",
+      "x y &",          "x y or",        "x y |",         "x y xor",      "x not",         "x y 2 ?",      "x dup *",
+      "x y swap -",     "x y dup1 + +",  "x y swap1 -",   "x A@ y A * +", "x A^ y A +",    "sx sy +",      "sxr syr +",
+      "width height +", "frameno pi +"};
+  size_t comparisons = 0, legacy_differences = 0;
+  for (const char* expression : corpus) {
+    const auto reference = current(expression, IRIS_BACKEND_SCALAR, 0);
+    auto verify = [&](const std::vector<float>& values, const char* path) {
+      for (int col = 0; col < width; ++col) {
+        const size_t index = width + col; // fixture row 1: x=4, y=9, all operations finite
+        if (!std::isfinite(values[index]) ||
+            std::abs(values[index] - reference[index]) > 1e-4f * std::max(1.0f, std::abs(reference[index]))) {
+          if (std::strcmp(path, "iris") == 0)
+            throw std::runtime_error(std::string("finite expression mismatch: ") + path + ": " + expression);
+          ++legacy_differences;
+          if (col == 0)
+            std::cerr << "legacy difference: " << path << ": " << expression << ": actual=" << values[index]
+                      << ", reference=" << reference[index] << '\n';
+        }
+        ++comparisons;
+      }
+    };
+    for (auto backend : {IRIS_BACKEND_SCALAR, IRIS_BACKEND_LLVM, IRIS_BACKEND_SLEEF, IRIS_BACKEND_SLEEF_FAST})
+      if (iris_backend_available(backend))
+        for (int optimize : {0, 1})
+          verify(current(expression, backend, optimize), "iris");
+    for (const auto& path : paths)
+      if ((cpu(env) & path.required) == path.required)
+        verify(legacy(api, env, expression, path.flags), path.name);
+  }
+  std::cerr << "finite corpus: " << std::size(corpus) << " expressions, " << comparisons << " samples checked, "
+            << legacy_differences << " legacy differences\n";
   for (const char* expression : {"x sqrt", "x y min", "x y max", "-1 sqrt", "-0 0 min", "0 -0 max"}) {
     auto reference = current(expression, IRIS_BACKEND_SCALAR, 0);
     report("iris-scalar-opt0", expression, reference, reference);

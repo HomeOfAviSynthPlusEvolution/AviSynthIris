@@ -113,6 +113,20 @@ void constants() {
   a.output = {&result, 4};
   CHECK(iris_execute_v1(p.p, p.c, &a, nullptr) == IRIS_OK && result == 4103);
 }
+void source_depth_directives() {
+  struct Case {
+    const char* directive;
+    float bits, maximum;
+  };
+  for (int optimize : {0, 1})
+    for (const auto& item : {Case{"i8", 8, 255}, Case{"i10", 10, 1023}, Case{"i12", 12, 4095}, Case{"i14", 14, 16383},
+                             Case{"i16", 16, 65535}, Case{"f32", 32, 1}}) {
+      auto prefix = std::string(item.directive) + " ";
+      CHECK(evaluate((prefix + "sbitdepth").c_str(), 8, environment(), optimize) == item.bits);
+      near(evaluate((prefix + "1 scalef").c_str(), 8, environment(), optimize), 255 / item.maximum, 1e-5f);
+      near(evaluate((prefix + "1 yscalef").c_str(), 8, environment(1), optimize), 255 / item.maximum, 1e-5f);
+    }
+}
 void scaling() {
   for (int optimize : {0, 1}) {
     auto e = environment();
@@ -200,6 +214,7 @@ int main(int argc, char** argv) {
   try {
     constants();
     scaling();
+    source_depth_directives();
     time_and_errors();
   } catch (const std::exception& e) {
     std::cerr << e.what() << '\n';

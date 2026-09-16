@@ -340,7 +340,7 @@ void errors() {
                        "x[-2147483648,0]",
                        "x.Bad!",
                        "1e99",
-                       "0x10",
+                       "0x-10",
                        "nan",
                        "inf",
                        "x 1 sin",
@@ -663,9 +663,42 @@ void frontend_boundaries() {
     CHECK(compiled.value() == 1.5f);
   }
   auto config = options();
-  for (const char* number : {"1,5", "1.5tail", "1e+", "0x1.8p0"}) {
+  for (const char* number : {"1,5", "1.5tail", "1e+", "0x1p+", "0x1.8p0tail", "0x", "0x1p128", "0x1p-150"}) {
     iris_plan* plan = nullptr;
     CHECK(iris_compile(number, &config, &plan, nullptr) == IRIS_PARSE_ERROR && !plan);
+  }
+}
+void literal_boundaries() {
+  struct Case {
+    const char* source;
+    uint32_t bits;
+  };
+  const Case cases[] = {{"0x10", 0x41800000},
+                        {"0x1.8p0", 0x3fc00000},
+                        {"-0X1.8P+1", 0xc0400000},
+                        {"+0x.8p1", 0x3f800000},
+                        {"0x1p-149", 1},
+                        {"0x1.fffffep127", 0x7f7fffff},
+                        {"-0x0p0", 0x80000000},
+                        {"8e-46", 1},
+                        {"1.1754943508222875e-38", 0x00800000},
+                        {"3.4028234663852886e38", 0x7f7fffff},
+                        {"0e-9999", 0},
+                        {"2 dup-0 +", 0x40800000}};
+  for (int optimize : {0, 1}) {
+    for (const auto& c : cases) {
+      Compiled compiled(c.source, options(1, 1, optimize));
+      float value = compiled.value();
+      uint32_t actual;
+      std::memcpy(&actual, &value, sizeof actual);
+      CHECK(actual == c.bits);
+    }
+    auto o = options(1, 1, optimize);
+    for (const char* source : {"1e-50", "-1e-50", "7e-46", "3.402824e38", "1e9999", "2 dup-01 +", "2 sqrt@", "2 x@",
+                               "2 dup0tail +", "2 3 swap1tail -"}) {
+      iris_plan* plan = nullptr;
+      CHECK(iris_compile_ex(source, &o, test_backend, 0, &plan, nullptr) == IRIS_PARSE_ERROR && !plan);
+    }
   }
 }
 std::string expression(std::mt19937& rng, int depth) {
@@ -1086,6 +1119,7 @@ int main(int argc, char** argv) {
     strategies_and_allocation();
     dependencies();
     frontend_boundaries();
+    literal_boundaries();
     differential();
     concurrency();
     frontend_independence();

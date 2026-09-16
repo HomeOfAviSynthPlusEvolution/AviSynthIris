@@ -23,6 +23,11 @@ bool identifier(std::string_view s) {
 bool space(char c) {
   return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v';
 }
+bool hexadecimal(std::string_view s) {
+  if (!s.empty() && (s.front() == '+' || s.front() == '-'))
+    s.remove_prefix(1);
+  return s.size() > 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X');
+}
 bool decimal(std::string_view s) {
   size_t i = 0, digits = 0;
   if (i < s.size() && (s[i] == '+' || s[i] == '-'))
@@ -162,10 +167,11 @@ IR parse(const std::string& source, uint32_t input_count, bool extended_inputs, 
       uint32_t value = default_value;
       if (t.size() != prefix) {
         const char* begin = t.data() + prefix;
-        if (*begin == '+')
+        const bool negative = *begin == '-';
+        if (*begin == '+' || negative)
           ++begin;
         auto result = std::from_chars(begin, t.data() + t.size(), value);
-        if (result.ec != std::errc{} || result.ptr != t.data() + t.size())
+        if (result.ec != std::errc{} || result.ptr != t.data() + t.size() || (negative && value != 0))
           error("invalid stack index");
       }
       if (value < minimum)
@@ -233,13 +239,22 @@ IR parse(const std::string& source, uint32_t input_count, bool extended_inputs, 
       n.args = {coordinate, denominator, 0};
     } else if (t == "pi") {
       n.value = 3.14159265358979323846f;
-    } else if (decimal(t)) {
+    } else if (decimal(t) || hexadecimal(t)) {
+      const bool hex = hexadecimal(t);
+      const bool negative = t.front() == '-';
       const char* begin = t.data();
-      if (*begin == '+')
+      if (*begin == '+' || (hex && negative))
         ++begin;
-      auto r = std::from_chars(begin, t.data() + t.size(), n.value, std::chars_format::general);
+      if (hex)
+        begin += 2; // from_chars hex format does not consume the 0x prefix.
+      if (hex && (*begin == '+' || *begin == '-'))
+        error("invalid hexadecimal constant");
+      auto r = std::from_chars(begin, t.data() + t.size(), n.value,
+                               hex ? std::chars_format::hex : std::chars_format::general);
       if (r.ec != std::errc{} || r.ptr != t.data() + t.size() || !std::isfinite(n.value))
         error("constant outside binary32 range");
+      if (hex && negative)
+        n.value = -n.value;
     } else if (((t[0] >= 'x' && t[0] <= 'z') || (extended_inputs && t[0] >= 'a' && t[0] <= 'w')) &&
                (t.size() == 1 || t[1] == '[' || t[1] == '.')) {
       n.input = static_cast<uint32_t>(t[0] >= 'x' ? t[0] - 'x' : t[0] - 'a' + 3);
