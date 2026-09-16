@@ -7,6 +7,7 @@
 #include <cstring>
 #include <iostream>
 #include <limits>
+#include <locale>
 #include <random>
 #include <stdexcept>
 #include <thread>
@@ -613,6 +614,60 @@ void dependencies() {
   source.assign(1000, '!');
   CHECK(owned.value(4) == 6);
 }
+void frontend_boundaries() {
+  for (int optimize : {0, 1}) {
+    for (int count : {64, 65}) {
+      std::string source;
+      for (int i = 0; i < count; ++i)
+        source += " x.P" + std::to_string(i) + (i ? " +" : "");
+      Compiled compiled(source, options(1, 1, optimize));
+      CHECK(compiled.info().property_count == size_t(count));
+      std::vector<float> properties(size_t(count), 0);
+      for (int slot = 0; slot < count; ++slot) {
+        iris_property_dependency dependency{};
+        CHECK(iris_plan_get_property(compiled.p, size_t(slot), &dependency, nullptr) == IRIS_OK);
+        CHECK(dependency.input == 0);
+        CHECK(std::string(dependency.name) == "P" + std::to_string(slot));
+        properties[size_t(slot)] = float(slot + 1);
+      }
+      float output = 0;
+      iris_execute_args args{};
+      args.output = {&output, sizeof(output)};
+      args.properties = properties.data();
+      args.property_count = properties.size();
+      CHECK(iris_execute(compiled.p, compiled.c, &args, nullptr) == IRIS_OK);
+      CHECK(output == float(count * (count + 1) / 2));
+      std::vector<float> changed(size_t(count), 3.0f);
+      args.properties = changed.data();
+      CHECK(iris_execute(compiled.p, compiled.c, &args, nullptr) == IRIS_OK && output == float(count * 3));
+    }
+    for (int count : {128, 129}) {
+      std::string source;
+      for (int i = 0; i < count; ++i)
+        source += " x " + std::to_string(i) + " + V" + std::to_string(i) + "^";
+      for (int i = 0; i < count; ++i)
+        source += " V" + std::to_string(i) + (i ? " +" : "");
+      Compiled compiled(source, options(1, 1, optimize));
+      CHECK(compiled.value(7) == float(count * 7 + count * (count - 1) / 2));
+    }
+  }
+  struct Comma : std::numpunct<char> {
+    char do_decimal_point() const override { return ','; }
+  };
+  struct LocaleScope {
+    std::locale previous = std::locale::global(std::locale(std::locale::classic(), new Comma));
+    ~LocaleScope() { std::locale::global(previous); }
+  } locale;
+  for (const char* number : {"1.5", "+1.5", ".15e1", "15.e-1", "+.150E+1"}) {
+    Compiled compiled(std::string(" \t\r\n\f\v") + number);
+    CHECK(compiled.value() == 1.5f);
+  }
+  auto config = options();
+  for (const char* number : {"1,5", "1.5tail", "1e+", "0x1.8p0"}) {
+    iris_plan* plan = nullptr;
+    CHECK(iris_compile(number, &config, &plan, nullptr) == IRIS_PARSE_ERROR && !plan);
+  }
+}
 std::string expression(std::mt19937& rng, int depth) {
   if (!depth) {
     const char* leaves[] = {"x", "y", "z", "0", "-0", "1", "-1", "0.5", "1e20"};
@@ -1030,6 +1085,7 @@ int main(int argc, char** argv) {
     layout();
     strategies_and_allocation();
     dependencies();
+    frontend_boundaries();
     differential();
     concurrency();
     frontend_independence();
