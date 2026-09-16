@@ -4,6 +4,8 @@
 #define NOMINMAX
 #include <windows.h>
 #define AVSC_NO_DECLSPEC
+// The C SDK's inline helpers use malloc/free without including their header.
+#include <cstdlib>
 #include <avisynth_c.h>
 #include <stdexcept>
 #include <string>

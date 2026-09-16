@@ -3,6 +3,7 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <vector>
 #include <cstring>
 
 namespace {
@@ -392,7 +393,7 @@ void lut_adapter(AvsApi& api, AVS_ScriptEnvironment* env, const char* backend) {
     }
     check_uniform(api, clip->clip, expected);
     auto copied = script_clip(api, env, "IrisExpr(" + source + ",\"\",lut=1" + suffix);
-    std::fill(expected.begin(), expected.end(), 100);
+    std::fill(expected.begin(), expected.end(), 100.0f);
     if (count == 4)
       expected[3] = 50;
     check_uniform(api, copied->clip, expected);
