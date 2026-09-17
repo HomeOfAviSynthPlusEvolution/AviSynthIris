@@ -44,7 +44,7 @@ SLEEF バックエンド名は数学処理の方針を選ぶもので、式全�
 
 ## ビルドと組み込み
 
-CMake 3.16 以降と、浮動小数点の `std::from_chars` に対応する標準ライブラリを備えた C++17 コンパイラーが必要です。C のサンプルとインターフェーステストは C99 を使用します。既定のビルドには LLVM も AviSynth も不要で、依存関係をダウンロードしません。
+CMake 3.16 以降と、C++17 コンパイラーが必要です。C のサンプルとインターフェーステストは C99 を使用します。CMake は浮動小数点 `std::from_chars` の可用性を確認し、利用できない場合は固定の C ロケールで `strtof_l`（Windows では `_strtof_l`）を使用します。`IRIS_FORCE_FLOAT_PARSE_FALLBACK=ON` で互換処理を強制的に検証できます。既定のビルドには LLVM も AviSynth も不要で、依存関係をダウンロードしません。
 
 ```sh
 cmake -S . -B build/release -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON

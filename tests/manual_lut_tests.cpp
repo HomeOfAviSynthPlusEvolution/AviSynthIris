@@ -5,6 +5,7 @@
 #include <functional>
 #include <iostream>
 #include <limits>
+#include <new>
 
 thread_local bool reject_allocation = false;
 thread_local bool fail_array = false;
@@ -21,6 +22,28 @@ void* operator new[](std::size_t n) {
     throw std::bad_alloc();
   }
   return ::operator new(n);
+}
+// Keep nothrow allocations on the same malloc/free path as throwing new.
+// Prebuilt dependencies (including LLVM) can call either overload.
+void* operator new(std::size_t n, const std::nothrow_t&) noexcept {
+  try {
+    return ::operator new(n);
+  } catch (...) {
+    return nullptr;
+  }
+}
+void* operator new[](std::size_t n, const std::nothrow_t&) noexcept {
+  try {
+    return ::operator new[](n);
+  } catch (...) {
+    return nullptr;
+  }
+}
+void operator delete(void* p, const std::nothrow_t&) noexcept {
+  std::free(p);
+}
+void operator delete[](void* p, const std::nothrow_t&) noexcept {
+  std::free(p);
 }
 void operator delete(void* p) noexcept {
   std::free(p);
@@ -237,8 +260,26 @@ void snapshots_and_bounds() {
   require(clamped == 1023, "optimized x bypassed LUT index clamping");
 }
 } // namespace
+// Exercise the overloads used by LLVM's temporary sort buffers.
+void nothrow_allocation_contract() {
+  void* single = ::operator new(32, std::nothrow);
+  void* array = ::operator new[](32, std::nothrow);
+  const bool allocated = single && array;
+  ::operator delete(single);
+  ::operator delete[](array);
+  reject_allocation = true;
+  single = ::operator new(32, std::nothrow);
+  array = ::operator new[](32, std::nothrow);
+  reject_allocation = false;
+  const bool rejected = !single && !array;
+  ::operator delete(single);
+  ::operator delete[](array);
+  if (!allocated || !rejected)
+    throw std::runtime_error("nothrow allocation bypassed the test allocator");
+}
 int main(int argc, char**) {
   try {
+    nothrow_allocation_contract();
     if (argc > 1)
       backend = IRIS_BACKEND_LLVM;
     budget();

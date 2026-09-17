@@ -75,24 +75,61 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install LLVM SDK (Windows)
+      - name: Download LLVM SDK (Windows)
         if: runner.os == 'Windows'
+        timeout-minutes: 12
         shell: pwsh
         env:
           LLVM_ARCH: ${{ matrix.llvm_arch }}
-          LLVM_SHA256: ${{ matrix.llvm_sha256 }}
         run: |
           $name = "clang+llvm-22.1.8-$env:LLVM_ARCH-pc-windows-msvc"
           $archive = Join-Path $env:RUNNER_TEMP 'llvm.tar.xz'
-          Invoke-WebRequest "https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.8/$name.tar.xz" -OutFile $archive
+          Write-Host "Downloading $name.tar.xz"
+          curl.exe --fail --location --show-error --connect-timeout 30 --max-time 300 `
+            --retry 1 --retry-delay 5 --speed-limit 1024 --speed-time 60 `
+            --output $archive "https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.8/$name.tar.xz"
+          if ($LASTEXITCODE -ne 0) { throw 'LLVM SDK download failed' }
+          Write-Host "Downloaded $((Get-Item $archive).Length) bytes"
+
+      - name: Verify LLVM SDK (Windows)
+        if: runner.os == 'Windows'
+        timeout-minutes: 2
+        shell: pwsh
+        env:
+          LLVM_SHA256: ${{ matrix.llvm_sha256 }}
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'llvm.tar.xz'
           if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne $env:LLVM_SHA256) {
             throw 'LLVM SDK checksum mismatch'
           }
-          tar -xf $archive -C $env:RUNNER_TEMP
-          if ($LASTEXITCODE -ne 0) { throw 'LLVM SDK extraction failed' }
-          $sdk = Join-Path $env:RUNNER_TEMP $name
-          "LLVM_DIR=$sdk/lib/cmake/llvm" >> $env:GITHUB_ENV
-          "$sdk/bin" >> $env:GITHUB_PATH
+          Write-Host 'LLVM SDK SHA256 verified'
+
+      # Use Python's built-in xz reader instead of Windows tar and external filters.
+      - name: Extract LLVM SDK (Windows)
+        if: runner.os == 'Windows'
+        timeout-minutes: 10
+        shell: python
+        env:
+          LLVM_ARCH: ${{ matrix.llvm_arch }}
+        run: |
+          import os
+          import pathlib
+          import tarfile
+          import time
+
+          root = pathlib.Path(os.environ["RUNNER_TEMP"])
+          started = time.monotonic()
+          print("Extracting verified LLVM SDK", flush=True)
+          with tarfile.open(root / "llvm.tar.xz", "r:xz") as archive:
+              archive.extractall(root, filter="data")
+          sdk = root / f"clang+llvm-22.1.8-{os.environ['LLVM_ARCH']}-pc-windows-msvc"
+          if not (sdk / "lib/cmake/llvm/LLVMConfig.cmake").is_file():
+              raise RuntimeError("LLVM SDK configuration is missing after extraction")
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as output:
+              output.write(f"LLVM_DIR={sdk.as_posix()}/lib/cmake/llvm\n")
+          with open(os.environ["GITHUB_PATH"], "a", encoding="utf-8") as output:
+              output.write(f"{sdk.as_posix()}/bin\n")
+          print(f"LLVM SDK ready in {time.monotonic() - started:.1f} seconds", flush=True)
 
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
@@ -155,7 +192,7 @@ jobs:
           exit 0
 
   scalar:
-    name: Linux x64 / GCC / optional dependencies disabled
+    name: Linux x64 / GCC / scalar + float parsing fallback
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -169,7 +206,7 @@ jobs:
         run: >-
           cmake -S . -B build/ci -G Ninja
           -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
-          -DIRIS_LLVM=OFF -DIRIS_SLEEF=OFF
+          -DIRIS_LLVM=OFF -DIRIS_SLEEF=OFF -DIRIS_FORCE_FLOAT_PARSE_FALLBACK=ON
       - name: Build
         run: cmake --build build/ci --parallel 3
       - name: Test

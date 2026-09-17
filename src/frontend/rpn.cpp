@@ -1,5 +1,6 @@
 #include "ir/ir.hpp"
 #include "expr.hpp"
+#include "float_parse.hpp"
 #include <charconv>
 #include <cmath>
 #include <string_view>
@@ -249,9 +250,7 @@ IR parse(const std::string& source, uint32_t input_count, bool extended_inputs, 
         begin += 2; // from_chars hex format does not consume the 0x prefix.
       if (hex && (*begin == '+' || *begin == '-'))
         error("invalid hexadecimal constant");
-      auto r = std::from_chars(begin, t.data() + t.size(), n.value,
-                               hex ? std::chars_format::hex : std::chars_format::general);
-      if (r.ec != std::errc{} || r.ptr != t.data() + t.size() || !std::isfinite(n.value))
+      if (!parse_float(begin, t.data() + t.size(), n.value, hex) || !std::isfinite(n.value))
         error("constant outside binary32 range");
       if (hex && negative)
         n.value = -n.value;

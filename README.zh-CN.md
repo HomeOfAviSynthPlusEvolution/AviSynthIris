@@ -44,7 +44,7 @@ SLEEF 后端名称选择的是数学策略，并非整个表达式的误差上�
 
 ## 构建与集成
 
-需要 CMake 3.16 或更新版本，以及标准库支持浮点 `std::from_chars` 的 C++17 编译器。C 示例和接口测试使用 C99。默认构建不需要 LLVM 或 AviSynth，也不会下载依赖。
+需要 CMake 3.16 或更新版本，以及C++17 编译器。C 示例和接口测试使用 C99。CMake 检测浮点 `std::from_chars` 是否可用；缺失时使用固定 C locale 的 `strtof_l`（Windows 为 `_strtof_l`）兼容解析。可用 `IRIS_FORCE_FLOAT_PARSE_FALLBACK=ON` 强制验证兼容路径。默认构建不需要 LLVM 或 AviSynth，也不会下载依赖。
 
 ```sh
 cmake -S . -B build/release -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON

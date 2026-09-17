@@ -44,7 +44,7 @@ The SLEEF backend names select a math policy, not an error bound for an entire e
 
 ## Building and integration
 
-CMake 3.16 or later and a C++17 compiler with floating-point `std::from_chars` support are required. C examples and interface tests use C99. The default build needs neither LLVM nor AviSynth and does not download dependencies.
+CMake 3.16 or later and a C++17 compiler are required. C examples and interface tests use C99. CMake checks floating-point `std::from_chars` availability; when unavailable, Iris uses locale-specific `strtof_l` (Windows: `_strtof_l`) with a fixed C locale. `IRIS_FORCE_FLOAT_PARSE_FALLBACK=ON` exercises this compatibility path. The default build needs neither LLVM nor AviSynth and does not download dependencies.
 
 ```sh
 cmake -S . -B build/release -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
