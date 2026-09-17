@@ -10,6 +10,7 @@
 #include <limits>
 #include <map>
 #include <mutex>
+#include <utility>
 
 namespace iris {
 namespace {
@@ -451,8 +452,9 @@ std::shared_ptr<const JitCode> compile_llvm(const Program& p) {
   Lowering lowering(m, code->jit, vectors);
   lowering.lower(p);
   auto row = LLVMGetNamedFunction(m.module, "iris_row");
-  for (const auto& attribute :
-       {std::make_pair("target-cpu", target.cpu.get()), std::make_pair("target-features", target.features.get())})
+  const std::pair<const char*, const char*> attributes[] = {
+      {"target-cpu", target.cpu.get()}, {"target-features", target.features.get()}};
+  for (const auto& attribute : attributes)
     LLVMAddAttributeAtIndex(row, LLVMAttributeFunctionIndex,
                             LLVMCreateStringAttribute(m.context, attribute.first,
                                                       unsigned(std::strlen(attribute.first)), attribute.second,
