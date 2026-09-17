@@ -67,7 +67,11 @@ target_link_libraries(MyHost PRIVATE Iris::Iris)
 
 ### 可选 LLVM 与 SLEEF
 
-使用 `-DIRIS_LLVM=ON -DLLVM_DIR=/path/to/lib/cmake/llvm` 启用 LLVM。实现支持 LLVM 20–22 C API，要求提供导出的 `LLVM` 或 `LLVM-C` CMake 目标。Ubuntu 24.04 可从官方仓库安装 `llvm-20-dev`，并设置 `LLVM_DIR=/usr/lib/llvm-20/lib/cmake/llvm`。
+LLVM 最低要求为 20；高于已验证的 20–23 范围时给出警告并继续构建。
+
+使用 `-DIRIS_LLVM=ON -DLLVM_DIR=/path/to/lib/cmake/llvm` 启用 LLVM。实现支持 LLVM 20–23 C API，默认使用导出的 `LLVM` 或 `LLVM-C` CMake 目标。Ubuntu 24.04 可从官方仓库安装 `llvm-20-dev`，并设置 `LLVM_DIR=/usr/lib/llvm-20/lib/cmake/llvm`。
+
+设置 `IRIS_LLVM_STATIC=ON` 可改为链接 LLVM 静态组件库，需要核心、ORC JIT、优化流程、本机代码生成组件及其依赖。在 Windows 上，这些库必须与宿主使用一致的 C/C++ 运行库配置；标准 `/MD` Release 宿主要求在构建 LLVM 时设置 `CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL`。请求静态链接时，Iris 不会回退到 LLVM 动态库。
 
 使用 `-DIRIS_SLEEF=ON -DIRIS_FETCH_SLEEF=ON` 下载 SLEEF 3.9.0、校验 SHA256，并与 Iris 一起构建静态库。这需要 CMake 3.18 或更新版本。下载默认关闭，启用后使用构建目录，无需单独安装 SLEEF。
 
@@ -76,7 +80,7 @@ cmake -S . -B build/release -DIRIS_LLVM=ON -DLLVM_DIR=/path/to/lib/cmake/llvm -D
 cmake --build build/release --config Release --parallel
 ```
 
-离线构建时，另将 `FETCHCONTENT_SOURCE_DIR_SLEEF` 指向已解压 SLEEF 3.9.0 源码的绝对路径。也可以同时设置 `IRIS_SLEEF_INCLUDE_DIR`（包含 `sleef.h`）和 `IRIS_SLEEF_LIBRARY`（兼容的静态库）；手动指定的依赖优先于下载，路径不完整或无效时会报错。运行宿主时必须能找到所需的 LLVM 运行库；静态链接的 SLEEF 无需另行安装运行库。
+离线构建时，另将 `FETCHCONTENT_SOURCE_DIR_SLEEF` 指向已解压 SLEEF 3.9.0 源码的绝对路径。也可以同时设置 `IRIS_SLEEF_INCLUDE_DIR`（包含 `sleef.h`）和 `IRIS_SLEEF_LIBRARY`（兼容的静态库）；手动指定的依赖优先于下载，路径不完整或无效时会报错。动态链接 LLVM 时，运行宿主必须能找到所需的 LLVM 运行库；静态链接的 SLEEF 无需另行安装运行库。
 
 Windows ARM64/ARM64EC 不支持 SLEEF，这些目标需保持 `IRIS_SLEEF=OFF`。
 

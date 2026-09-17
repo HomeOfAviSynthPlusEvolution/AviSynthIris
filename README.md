@@ -67,7 +67,11 @@ The public API is [include/iris/iris.h](include/iris/iris.h). Compile with `iris
 
 ### Optional LLVM and SLEEF
 
-Enable LLVM with `-DIRIS_LLVM=ON -DLLVM_DIR=/path/to/lib/cmake/llvm`. The implementation supports LLVM 20–22's C API and requires the exported `LLVM` or `LLVM-C` CMake target. On Ubuntu 24.04, install `llvm-20-dev` from the official repositories and set `LLVM_DIR=/usr/lib/llvm-20/lib/cmake/llvm`.
+LLVM 20 is the minimum version; versions newer than the tested 20–23 range emit a warning and are allowed to build.
+
+Enable LLVM with `-DIRIS_LLVM=ON -DLLVM_DIR=/path/to/lib/cmake/llvm`. The implementation supports LLVM 20–23's C API and by default uses the exported `LLVM` or `LLVM-C` CMake target. On Ubuntu 24.04, install `llvm-20-dev` from the official repositories and set `LLVM_DIR=/usr/lib/llvm-20/lib/cmake/llvm`.
+
+Set `IRIS_LLVM_STATIC=ON` to link LLVM's static component libraries instead. This requires the core, ORC JIT, optimization passes, and native code-generation components, together with their dependencies. On Windows, build these libraries with the same C/C++ runtime configuration as the host; a standard `/MD` Release host needs `CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL` when building LLVM. Iris does not fall back to a shared LLVM library when static linking is requested.
 
 Enable SLEEF with `-DIRIS_SLEEF=ON -DIRIS_FETCH_SLEEF=ON` to download SLEEF 3.9.0, verify its SHA256, and build a static library with Iris. This requires CMake 3.18 or later. Downloading is opt-in and uses the build directory; no separate SLEEF installation is needed.
 
@@ -76,7 +80,7 @@ cmake -S . -B build/release -DIRIS_LLVM=ON -DLLVM_DIR=/path/to/lib/cmake/llvm -D
 cmake --build build/release --config Release --parallel
 ```
 
-For offline builds, also set `FETCHCONTENT_SOURCE_DIR_SLEEF` to an absolute path containing unpacked SLEEF 3.9.0 sources. Alternatively, set both `IRIS_SLEEF_INCLUDE_DIR` (containing `sleef.h`) and `IRIS_SLEEF_LIBRARY` (a compatible static library); these take priority over downloading. Partial or invalid paths cause an error. Required LLVM runtime libraries must be discoverable when running the host; statically linked SLEEF needs no separate runtime installation.
+For offline builds, also set `FETCHCONTENT_SOURCE_DIR_SLEEF` to an absolute path containing unpacked SLEEF 3.9.0 sources. Alternatively, set both `IRIS_SLEEF_INCLUDE_DIR` (containing `sleef.h`) and `IRIS_SLEEF_LIBRARY` (a compatible static library); these take priority over downloading. Partial or invalid paths cause an error. When linking LLVM dynamically, its runtime libraries must be discoverable when running the host; statically linked SLEEF needs no separate runtime installation.
 
 SLEEF is not supported on Windows ARM64/ARM64EC; keep `IRIS_SLEEF=OFF` on these targets.
 

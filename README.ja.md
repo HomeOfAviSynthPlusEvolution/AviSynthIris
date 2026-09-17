@@ -67,7 +67,11 @@ target_link_libraries(MyHost PRIVATE Iris::Iris)
 
 ### 任意の LLVM と SLEEF
 
-`-DIRIS_LLVM=ON -DLLVM_DIR=/path/to/lib/cmake/llvm` で LLVM を有効にします。実装は LLVM 20–22 C API に対応し、エクスポートされた `LLVM` または `LLVM-C` CMake ターゲットを必要とします。Ubuntu 24.04 では公式リポジトリーから `llvm-20-dev` をインストールし、`LLVM_DIR=/usr/lib/llvm-20/lib/cmake/llvm` を指定できます。
+LLVM 20 以降が必要です。検証済みの 20–23 より新しいバージョンは警告を出してビルドを続行します。
+
+`-DIRIS_LLVM=ON -DLLVM_DIR=/path/to/lib/cmake/llvm` で LLVM を有効にします。実装は LLVM 20–23 C API に対応し、既定ではエクスポートされた `LLVM` または `LLVM-C` CMake ターゲットを使用します。Ubuntu 24.04 では公式リポジトリーから `llvm-20-dev` をインストールし、`LLVM_DIR=/usr/lib/llvm-20/lib/cmake/llvm` を指定できます。
+
+`IRIS_LLVM_STATIC=ON` を指定すると LLVM の静的コンポーネントライブラリにリンクします。コア、ORC JIT、最適化パス、ネイティブコード生成のコンポーネントと、その依存ライブラリが必要です。Windows ではホストと同じ C/C++ ランタイム設定で構築してください。標準の `/MD` Release ホストには、LLVM の構築時に `CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL` を指定します。静的リンクを要求した場合、LLVM 共有ライブラリへのフォールバックは行いません。
 
 `-DIRIS_SLEEF=ON -DIRIS_FETCH_SLEEF=ON` を指定すると、SLEEF 3.9.0 をダウンロードし、SHA256 を検証して Iris とともに静的ライブラリーをビルドします。CMake 3.18 以降が必要です。ダウンロードは既定では無効です。有効にするとビルドディレクトリーを使用し、SLEEF の個別インストールは不要です。
 
@@ -76,7 +80,7 @@ cmake -S . -B build/release -DIRIS_LLVM=ON -DLLVM_DIR=/path/to/lib/cmake/llvm -D
 cmake --build build/release --config Release --parallel
 ```
 
-オフラインでは、展開済みの SLEEF 3.9.0 ソースを指す絶対パスを `FETCHCONTENT_SOURCE_DIR_SLEEF` に指定します。または、`IRIS_SLEEF_INCLUDE_DIR`（`sleef.h` を含むディレクトリー）と `IRIS_SLEEF_LIBRARY`（互換性のある静的ライブラリー）の両方を指定できます。手動指定がダウンロードより優先され、不完全または無効なパスはエラーになります。ホスト実行時には必要な LLVM ランタイムライブラリーを検索できる必要があります。静的リンクされた SLEEF のランタイムを別途インストールする必要はありません。
+オフラインでは、展開済みの SLEEF 3.9.0 ソースを指す絶対パスを `FETCHCONTENT_SOURCE_DIR_SLEEF` に指定します。または、`IRIS_SLEEF_INCLUDE_DIR`（`sleef.h` を含むディレクトリー）と `IRIS_SLEEF_LIBRARY`（互換性のある静的ライブラリー）の両方を指定できます。手動指定がダウンロードより優先され、不完全または無効なパスはエラーになります。LLVM を動的リンクする場合、ホスト実行時に必要な LLVM ランタイムライブラリーを検索できる必要があります。静的リンクされた SLEEF のランタイムを別途インストールする必要はありません。
 
 Windows ARM64/ARM64EC は SLEEF に対応していないため、これらのターゲットでは `IRIS_SLEEF=OFF` を指定してください。
 
