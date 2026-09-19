@@ -31,7 +31,7 @@ function(iris_configure_float_parsing)
       set(iris_locale_probe "
         #include <cstdlib>
         #include <locale.h>
-        #ifdef __APPLE__
+        #if defined(__APPLE__) || defined(__FreeBSD__)
         #include <xlocale.h>
         #endif
         int main() {

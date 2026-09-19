@@ -8,7 +8,7 @@
 #include <locale.h>
 #include <new>
 #include <string>
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__FreeBSD__)
 #include <xlocale.h>
 #endif
 #endif
